@@ -1,0 +1,25 @@
+[project]
+name = "aiswe"
+version = "0.1.0"
+description = "AI Software Engineer -- a sandboxed autonomous coding agent"
+requires-python = ">=3.10"
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "litellm>=1.0.0",
+]
+
+[project.optional-dependencies]
+# Only needed to run evaluation/evaluator.py's own pass/fail check -- pytest
+# itself already runs inside the sandbox image regardless (docker/Dockerfile);
+# this is for the evaluator's host-side verification step.
+eval = ["pytest>=7.0.0"]
+
+[project.scripts]
+aiswe = "aiswe.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
