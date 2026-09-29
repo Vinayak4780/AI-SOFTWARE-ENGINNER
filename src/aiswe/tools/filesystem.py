@@ -1,5 +1,5 @@
 """File read/write/edit tools, routed through the sandbox's JSON helper
-(docker/helper.py) so every operation is confined to /workspace."""
+(sandbox/image/helper.py) so every operation is confined to /workspace."""
 
 from __future__ import annotations
 

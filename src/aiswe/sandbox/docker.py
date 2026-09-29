@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 IMAGE_NAME = "aiswe-sandbox:latest"
-DOCKER_DIR = Path(__file__).resolve().parents[3] / "docker"
+DOCKER_DIR = Path(__file__).resolve().parent / "image"
 HELPER_PATH_IN_CONTAINER = "/usr/local/bin/aiswe_helper.py"
 DEFAULT_RUNTIME = os.environ.get("AISWE_DOCKER_RUNTIME", "runc")
 

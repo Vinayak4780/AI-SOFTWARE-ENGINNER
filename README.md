@@ -28,14 +28,13 @@ src/aiswe/
     memory.py               update_repo_notes
   sandbox/
     docker.py              the per-task Docker sandbox runtime
+    image/Dockerfile        sandbox image (Python, git, gh CLI) -- ships inside the package
+    image/helper.py         in-container JSON command helper (file/git/AST-symbol ops)
   memory/
     repo_memory.py          reads/writes .aiswe/repo-notes.md
   evaluation/
     tasks.py                fixed evaluation task set
     evaluator.py             runs the task set through the real CLI, scores pass/fail
-docker/
-  Dockerfile            sandbox image (Python, git, gh CLI)
-  helper.py              in-container JSON command helper (file/git/AST-symbol ops)
 ```
 
 `code_intelligence/` as a dedicated package and an `api/` service layer don't
@@ -75,7 +74,7 @@ PLAN.md's Phase 3). Nothing is stubbed out ahead of being implemented.
   github.com) and `GITHUB_TOKEN` set in `.env`. Not live-tested against a real
   repo/token -- see PLAN.md for the caveat.
 - **Sandbox** (`sandbox/docker.py`): every task runs in its own ephemeral Docker
-  container (`docker/Dockerfile`), with all capabilities dropped, no new privileges,
+  container (`sandbox/image/Dockerfile`), with all capabilities dropped, no new privileges,
   a process-count limit, memory/CPU caps, and network disabled unless `--network`
   is passed. The container mounts your repo at `/workspace`.
 - **Approval gate** (`approval.py`): every state-changing tool call is shown to
@@ -95,25 +94,48 @@ Nvidia-hosted model returns intermittent `503 Service temporarily overloaded`)
 and generally weaker at multi-step tool-calling than Claude. The retry +
 model-fallback logic in `agent/developer.py` exists specifically to absorb that.
 
-## Setup
+## Install (use it in any folder)
+
+Install once, globally, so the `aiswe` command works everywhere:
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\pip install -e .
+pip install git+https://github.com/Vinayak4780/AI-SOFTWARE-ENGINNER.git
+# or, from a local checkout:  pip install .
+# for developing aiswe itself: python -m venv .venv; .venv\Scripts\pip install -e .
 ```
 
 Requires Docker Desktop running (used to build and run the per-task sandbox
 container). The sandbox image is built automatically on first run.
 
-Copy `.env.example` to `.env` and add at least one of `OPENROUTER_API_KEY`
+Put your API keys in a global config file, `~/.aiswe/.env`
+(`C:\Users\<you>\.aiswe\.env` on Windows), using `.env.example` as the
+template. Add at least one of `OPENROUTER_API_KEY`
 (https://openrouter.ai/settings/keys) or `GROQ_API_KEY`
 (https://console.groq.com/keys) -- both is better, so there's a fallback
-provider if one is down.
+provider if one is down. Keys are looked up in `./.env` (the folder you run
+in), then `~/.aiswe/.env`, then a source checkout's own `.env`; the first
+value found wins.
 
 ## Usage
 
+`cd` into the project you want it to work on, then:
+
 ```powershell
-.venv\Scripts\aiswe run --repo "C:\path\to\some\repo" --task "add type hints to utils.py and make sure tests still pass"
+aiswe run "add type hints to utils.py and make sure tests still pass"
+aiswe run                                   # prompts for the task
+aiswe run "..." --repo "C:\path\to\repo"    # work on a different folder
+```
+
+The agent reads, edits, and creates files, runs commands and tests, and
+commits -- all inside the sandbox, with the folder mounted at `/workspace`.
+Each change is shown to you for approval first unless you pass `--yes`.
+
+As a library:
+
+```python
+import asyncio
+from aiswe import run_task
+asyncio.run(run_task("path/to/repo", "fix the failing test", auto_approve=False))
 ```
 
 Flags:

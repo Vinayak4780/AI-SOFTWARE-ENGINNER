@@ -23,3 +23,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# The sandbox image's build context ships inside the package, so a plain
+# (non-editable) install can still build the image.
+[tool.setuptools.package-data]
+"aiswe.sandbox" = ["image/Dockerfile", "image/helper.py"]

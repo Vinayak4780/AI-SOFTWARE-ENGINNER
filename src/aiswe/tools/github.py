@@ -1,5 +1,5 @@
 """GitHub integration: push a branch, open a PR, read/comment on an issue.
-Uses the `gh` CLI inside the sandbox (installed in docker/Dockerfile),
+Uses the `gh` CLI inside the sandbox (installed in sandbox/image/Dockerfile),
 authenticated via a GITHUB_TOKEN passed into the container's environment
 (see sandbox/docker.py). Needs the sandbox started with --network (these
 operations must reach github.com) and GITHUB_TOKEN set in .env.
