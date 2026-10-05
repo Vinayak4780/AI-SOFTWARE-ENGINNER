@@ -13,7 +13,7 @@ Phase 1 MVP: a single-tenant CLI tool.
 
 ```
 src/aiswe/
-  cli.py              entry point (`aiswe run ...`)
+  cli.py              entry point (`aiswe run ...`, `aiswe new ...`)
   approval.py          human approval gate (diff preview + y/N), shared by everything
   model_router.py      picks/orders models from whichever provider keys are in .env
   agent/
@@ -129,6 +129,23 @@ aiswe run "..." --repo "C:\path\to\repo"    # work on a different folder
 The agent reads, edits, and creates files, runs commands and tests, and
 commits -- all inside the sandbox, with the folder mounted at `/workspace`.
 Each change is shown to you for approval first unless you pass `--yes`.
+
+### Starting a new project
+
+```powershell
+aiswe new my-app "a todo list CLI in Python, with tests"
+aiswe new my-app                            # prompts for what to build
+```
+
+`aiswe new` creates the folder (it must be missing or empty), runs `git init`
+(branch `main`), and has the agent build the project from scratch: source
+files, README, `.gitignore`, tests, then a first commit. `aiswe run` in a
+folder that isn't a git repo also runs `git init` first, so commits work.
+Commits are authored with your host git `user.name`/`user.email`.
+
+Python and C/C++ projects can be run and tested inside the sandbox. Other
+languages (Node, Java, Go, Rust, ...) get written but not executed, since
+those toolchains aren't in the sandbox image yet.
 
 As a library:
 

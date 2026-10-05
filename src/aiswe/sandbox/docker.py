@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -94,6 +95,20 @@ class Sandbox:
         if result.returncode != 0:
             raise SandboxError(f"failed to start sandbox container:\n{result.stderr}")
         self._started = True
+
+    def prepare_git(self, name: str, email: str, *, init: bool) -> None:
+        """Give the container a git identity (its ~/.gitconfig only -- a repo's
+        own user.name/user.email still take precedence) so git_commit works,
+        and optionally `git init` the workspace for a brand-new project."""
+        setup = (
+            f"git config --global user.name {shlex.quote(name)} && "
+            f"git config --global user.email {shlex.quote(email)}"
+        )
+        if init:
+            setup += " && git init -q -b main"
+        result = self.run_shell(setup, timeout=30)
+        if result.exit_code != 0:
+            raise SandboxError(f"failed to set up git in sandbox:\n{result.stderr}")
 
     def stop(self) -> None:
         if not self._started:

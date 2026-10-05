@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 import litellm
@@ -71,6 +73,42 @@ SYSTEM_PROMPT = (
     "need network enabled and a GITHUB_TOKEN configured. When finished, summarize what "
     "changed and stop calling tools."
 )
+
+NEW_PROJECT_PROMPT = (
+    "This is a NEW project: /workspace starts empty (a fresh git repo, no commits yet). "
+    "Create it from scratch: pick a sensible layout for the language/framework asked for, "
+    "write the source files with write_file (parent folders are created automatically), "
+    "and add a README.md with how to run it, a .gitignore, and at least a few tests. "
+    "Run the code and the tests with run_shell/run_tests to prove they work -- the sandbox "
+    "has Python 3.11 (pytest installed) and gcc/g++/make; other toolchains (Node, Java, Go, "
+    "Rust, ...) are NOT installed and there's no network unless enabled, so if the user asked "
+    "for one of those, still write the project but say clearly that you couldn't run it. "
+    "Record the build/test commands with update_repo_notes, then git_commit the result."
+)
+
+FALLBACK_GIT_NAME = "aiswe"
+FALLBACK_GIT_EMAIL = "aiswe@localhost"
+
+
+def _in_git_repo(repo_path: str) -> bool:
+    """True if repo_path or any parent has a .git -- checked on the host so a
+    subfolder of an existing repo never gets a nested `git init`."""
+    p = Path(repo_path).resolve()
+    return any((d / ".git").exists() for d in (p, *p.parents))
+
+
+def _git_identity(repo_path: str) -> tuple[str, str]:
+    """The host's git user.name/user.email for this repo (local or global
+    config), so sandbox commits are authored by the user, not anonymously --
+    the container doesn't see the host's ~/.gitconfig."""
+    def get(key: str, fallback: str) -> str:
+        try:
+            r = subprocess.run(["git", "config", key], cwd=repo_path, capture_output=True, text=True)
+        except OSError:  # git not installed on the host
+            return fallback
+        return r.stdout.strip() or fallback
+
+    return get("user.name", FALLBACK_GIT_NAME), get("user.email", FALLBACK_GIT_EMAIL)
 
 
 def _review_gate(
@@ -164,6 +202,7 @@ async def run_task(
     network: bool = False,
     auto_approve: bool = False,
     model: str | None = None,
+    new_project: bool = False,
 ) -> None:
     model_chain = build_model_chain(task, override=model)
     skipped = [m for m in model_chain if not _provider_available(m)]
@@ -186,7 +225,14 @@ async def run_task(
     print(f"[sandbox] started container {sandbox.container_name} (network={'on' if network else 'off'})")
 
     try:
+        needs_init = not _in_git_repo(repo_path)
+        sandbox.prepare_git(*_git_identity(repo_path), init=needs_init)
+        if needs_init:
+            print(f"[git] {repo_path} wasn't a git repository -- initialized a new one (branch: main)")
+
         messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if new_project:
+            messages.append({"role": "user", "content": NEW_PROJECT_PROMPT})
         notes = read_notes(repo_path)
         if notes.strip():
             print("[memory] loaded existing repo notes (.aiswe/repo-notes.md)")

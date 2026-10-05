@@ -3,6 +3,8 @@
 Usage (run from inside the folder you want the agent to work on):
     aiswe run "description" [--repo PATH] [--network] [--yes] [--model NAME]
     aiswe run               # prompts for the task
+    aiswe new FOLDER "description" [--network] [--yes] [--model NAME]
+                            # create a brand-new project from scratch in FOLDER
 
 API keys are read from, in order (first value wins): ./.env in the current
 folder, ~/.aiswe/.env (a global config, so an installed aiswe works in any
@@ -54,6 +56,41 @@ def _print_billing_banner() -> None:
         )
 
 
+def _add_agent_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--network",
+        action="store_true",
+        help="allow network access inside the sandbox (default: off)",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        dest="auto_approve",
+        help="auto-approve edits/commands/commits instead of prompting (use with care)",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=(
+            "force a specific litellm model id (e.g. 'groq/llama-3.1-8b-instant'), "
+            "bypassing automatic task-based routing and fallback"
+        ),
+    )
+
+
+def _get_task(args: argparse.Namespace, prompt: str) -> str:
+    task = args.task or args.task_text
+    if not task:
+        try:
+            task = input(prompt).strip()
+        except EOFError:
+            task = ""
+    if not task:
+        print("error: no task given", file=sys.stderr)
+        sys.exit(1)
+    return task
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aiswe", description="AI software engineer -- sandboxed coding agent (free models only)")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -62,25 +99,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("task_text", nargs="?", metavar="TASK", help="what to do, in plain English")
     run.add_argument("--task", default=None, help="same as TASK, as a flag")
     run.add_argument("--repo", default=".", help="path to the repo to work on (default: current folder)")
-    run.add_argument(
-        "--network",
-        action="store_true",
-        help="allow network access inside the sandbox (default: off)",
-    )
-    run.add_argument(
-        "--yes",
-        action="store_true",
-        dest="auto_approve",
-        help="auto-approve edits/commands/commits instead of prompting (use with care)",
-    )
-    run.add_argument(
-        "--model",
-        default=None,
-        help=(
-            "force a specific litellm model id (e.g. 'groq/llama-3.1-8b-instant'), "
-            "bypassing automatic task-based routing and fallback"
-        ),
-    )
+    _add_agent_options(run)
+
+    new = subparsers.add_parser("new", help="create a brand-new project from scratch in a new (or empty) folder")
+    new.add_argument("folder", help="folder to create the project in (created if missing; must be empty)")
+    new.add_argument("task_text", nargs="?", metavar="TASK", help="what to build, e.g. 'a todo CLI in Python with tests'")
+    new.add_argument("--task", default=None, help="same as TASK, as a flag")
+    _add_agent_options(new)
 
     return parser
 
@@ -92,30 +117,41 @@ def main() -> None:
     if args.command == "run":
         repo_path = Path(args.repo).resolve()
         if not repo_path.is_dir():
-            print(f"error: no such directory: {repo_path}", file=sys.stderr)
-            sys.exit(1)
-
-        task = args.task or args.task_text
-        if not task:
-            try:
-                task = input(f"Task for {repo_path}: ").strip()
-            except EOFError:
-                task = ""
-        if not task:
-            print("error: no task given", file=sys.stderr)
-            sys.exit(1)
-
-        _print_billing_banner()
-
-        asyncio.run(
-            run_task(
-                str(repo_path),
-                task,
-                network=args.network,
-                auto_approve=args.auto_approve,
-                model=args.model,
+            print(
+                f"error: no such directory: {repo_path}\n"
+                f"(to start a new project there, use: aiswe new {args.repo} \"what to build\")",
+                file=sys.stderr,
             )
+            sys.exit(1)
+        task = _get_task(args, f"Task for {repo_path}: ")
+        new_project = False
+
+    elif args.command == "new":
+        repo_path = Path(args.folder).resolve()
+        if repo_path.exists() and (not repo_path.is_dir() or any(repo_path.iterdir())):
+            print(
+                f"error: {repo_path} already exists and isn't an empty folder\n"
+                f"(to work on an existing project, use: aiswe run --repo {args.folder} \"task\")",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        task = _get_task(args, f"What should the new project in {repo_path} be? ")
+        repo_path.mkdir(parents=True, exist_ok=True)
+        print(f"[new] creating project in {repo_path}")
+        new_project = True
+
+    _print_billing_banner()
+
+    asyncio.run(
+        run_task(
+            str(repo_path),
+            task,
+            network=args.network,
+            auto_approve=args.auto_approve,
+            model=args.model,
+            new_project=new_project,
         )
+    )
 
 
 if __name__ == "__main__":
