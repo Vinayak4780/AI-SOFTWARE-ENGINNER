@@ -9,14 +9,14 @@ As a library, provider keys come from the process environment (the CLI's
 """
 
 __version__ = "0.1.0"
-__all__ = ["run_task", "Sandbox"]
+__all__ = ["run_task", "AgentSession", "Sandbox"]
 
 
 def __getattr__(name: str):
     # Lazy, so `import aiswe` stays cheap and doesn't pull in litellm.
-    if name == "run_task":
-        from .agent import run_task
-        return run_task
+    if name in ("run_task", "AgentSession"):
+        from . import agent
+        return getattr(agent, name)
     if name == "Sandbox":
         from .sandbox import Sandbox
         return Sandbox

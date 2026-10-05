@@ -5,6 +5,6 @@ planner.py and debugger.py (a separate planning pass before implementation,
 and a dedicated debug-loop distinct from the main loop) are not built yet --
 today's developer.py does both inline. See PLAN.md's Roadmap v2."""
 
-from .developer import run_task
+from .developer import AgentSession, SessionError, run_task
 
-__all__ = ["run_task"]
+__all__ = ["AgentSession", "SessionError", "run_task"]

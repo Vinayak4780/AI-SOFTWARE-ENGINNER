@@ -13,11 +13,13 @@ Phase 1 MVP: a single-tenant CLI tool.
 
 ```
 src/aiswe/
-  cli.py              entry point (`aiswe run ...`, `aiswe new ...`)
+  cli.py              entry point (`aiswe run ...`, `aiswe new ...`, `aiswe serve`)
+  server.py            `aiswe serve`: JSON-lines chat protocol for editor front-ends
   approval.py          human approval gate (diff preview + y/N), shared by everything
   model_router.py      picks/orders models from whichever provider keys are in .env
+  providers.py         supported platforms + custom endpoints: keys, live model lists, call routing
   agent/
-    developer.py        the main tool-calling loop + planning phase
+    developer.py        AgentSession (the multi-turn tool-calling loop) + planning phase
     reviewer.py          second-model review gate on every commit attempt
   tools/
     filesystem.py        read_file / list_dir / edit_file / write_file
@@ -35,6 +37,7 @@ src/aiswe/
   evaluation/
     tasks.py                fixed evaluation task set
     evaluator.py             runs the task set through the real CLI, scores pass/fail
+vscode-extension/      the VS Code chat panel (TypeScript) -- talks to `aiswe serve`
 ```
 
 `code_intelligence/` as a dedicated package and an `api/` service layer don't
@@ -107,12 +110,22 @@ pip install git+https://github.com/Vinayak4780/AI-SOFTWARE-ENGINNER.git
 Requires Docker Desktop running (used to build and run the per-task sandbox
 container). The sandbox image is built automatically on first run.
 
+Supported platforms: OpenRouter, Groq, Claude (Anthropic), OpenAI, Google
+Gemini, Qwen (Alibaba DashScope), ModelScope, NVIDIA NIM, DeepSeek, Mistral,
+xAI, Cerebras, Together, Fireworks, DeepInfra -- plus any **custom
+OpenAI-compatible endpoint** (Ollama, LM Studio, vLLM, ...). Add a key for any
+of them and `aiswe models` lists every model that platform offers (fetched
+live); pass one with `--model <id>`, or leave it out for **Auto** routing,
+which tries the hand-verified free models first and then the best coding
+models from each platform you've configured, with automatic fallback.
+
 Put your API keys in a global config file, `~/.aiswe/.env`
 (`C:\Users\<you>\.aiswe\.env` on Windows), using `.env.example` as the
-template. Add at least one of `OPENROUTER_API_KEY`
-(https://openrouter.ai/settings/keys) or `GROQ_API_KEY`
-(https://console.groq.com/keys) -- both is better, so there's a fallback
-provider if one is down. Keys are looked up in `./.env` (the folder you run
+template. Add a key for at least one platform -- `OPENROUTER_API_KEY`
+(https://openrouter.ai/settings/keys) and `GROQ_API_KEY`
+(https://console.groq.com/keys) both have free models; more than one is
+better, so there's a fallback provider if one is down. (In VS Code you can
+enter keys in the chat panel instead -- see below.) Keys are looked up in `./.env` (the folder you run
 in), then `~/.aiswe/.env`, then a source checkout's own `.env`; the first
 value found wins.
 
@@ -154,6 +167,31 @@ import asyncio
 from aiswe import run_task
 asyncio.run(run_task("path/to/repo", "fix the failing test", auto_approve=False))
 ```
+
+For a multi-turn conversation with your own UI, use `AgentSession` (in
+`agent/developer.py`): pass an `emit(event_dict)` callback for progress and an
+async `approver(tool_name, args) -> bool` for approvals, then
+`await session.send(message)` once per message and `session.close()` at the end.
+
+### VS Code chat panel
+
+`vscode-extension/` is a Continue-style chat panel: ask questions or describe
+changes, see each proposed edit in VS Code's diff view, Approve/Reject in the
+chat. The file you have open (and your selection) is sent with each message.
+Pick a model per message from the dropdown (Auto, or any model of any
+platform you've added a key for); the gear button opens the keys screen,
+where keys and custom endpoints are saved encrypted in VS Code's secret storage.
+
+```powershell
+cd vscode-extension
+npm install; npm run compile; npm run package     # -> aiswe-0.1.0.vsix
+code --install-extension aiswe-0.1.0.vsix
+```
+
+It runs `python -m aiswe serve` in your workspace folder, so aiswe must be
+pip-installed into the Python the `aiswe.pythonPath` setting points at.
+`aiswe serve` speaks JSON lines over stdin/stdout -- the protocol is
+documented at the top of `server.py`, so other editors can reuse it.
 
 Flags:
 - `--network` -- allow network access inside the sandbox (off by default).

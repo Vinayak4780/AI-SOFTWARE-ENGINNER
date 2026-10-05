@@ -1,0 +1,84 @@
+{
+  "name": "aiswe",
+  "displayName": "aiswe — AI Software Engineer",
+  "description": "Chat with a sandboxed coding agent that reads, edits, tests and commits your code (free models).",
+  "version": "0.1.0",
+  "publisher": "vinayak4780",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Vinayak4780/AI-SOFTWARE-ENGINNER.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["AI", "Chat", "Programming Languages"],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aiswe",
+          "title": "aiswe",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "aiswe": [
+        {
+          "type": "webview",
+          "id": "aiswe.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      { "command": "aiswe.newChat", "title": "New Chat", "category": "aiswe", "icon": "$(add)" },
+      { "command": "aiswe.manageKeys", "title": "Models & API Keys", "category": "aiswe", "icon": "$(key)" },
+      { "command": "aiswe.cancel", "title": "Stop", "category": "aiswe", "icon": "$(debug-stop)" },
+      { "command": "aiswe.restart", "title": "Restart Agent", "category": "aiswe", "icon": "$(refresh)" },
+      { "command": "aiswe.showLog", "title": "Show Log", "category": "aiswe", "icon": "$(output)" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "aiswe.newChat", "when": "view == aiswe.chat", "group": "navigation@1" },
+        { "command": "aiswe.manageKeys", "when": "view == aiswe.chat", "group": "navigation@2" },
+        { "command": "aiswe.showLog", "when": "view == aiswe.chat", "group": "navigation@3" },
+        { "command": "aiswe.restart", "when": "view == aiswe.chat", "group": "overflow" }
+      ]
+    },
+    "configuration": {
+      "title": "aiswe",
+      "properties": {
+        "aiswe.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Python interpreter that has aiswe installed. Used as: <pythonPath> -m aiswe serve."
+        },
+        "aiswe.autoApprove": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run edits, commands and commits without asking. Use with care."
+        },
+        "aiswe.network": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow network access inside the sandbox (needed for git push / pull requests)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --skip-license"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.4.0"
+  }
+}

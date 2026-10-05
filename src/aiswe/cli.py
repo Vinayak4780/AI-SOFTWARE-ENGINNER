@@ -5,6 +5,9 @@ Usage (run from inside the folder you want the agent to work on):
     aiswe run               # prompts for the task
     aiswe new FOLDER "description" [--network] [--yes] [--model NAME]
                             # create a brand-new project from scratch in FOLDER
+    aiswe models              # list configured providers and their models
+    aiswe serve [--repo PATH] [--network] [--yes] [--model NAME]
+                            # JSON-lines chat server for editor front-ends (see server.py)
 
 API keys are read from, in order (first value wins): ./.env in the current
 folder, ~/.aiswe/.env (a global config, so an installed aiswe works in any
@@ -35,10 +38,12 @@ for _env_file in ENV_FILES:
 
 from .agent import run_task  # noqa: E402
 from .model_router import available_providers  # noqa: E402
+from .providers import all_providers, list_all_models  # noqa: E402
+from .server import serve  # noqa: E402
 
 # Windows consoles default to a legacy codepage (e.g. cp1252) that can't
 # encode characters models routinely emit (arrows, em dashes, checkmarks).
-for _stream in (sys.stdout, sys.stderr):
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
@@ -54,6 +59,20 @@ def _print_billing_banner() -> None:
             f"[billing] warning: no provider API keys found (looked in ./.env and {GLOBAL_CONFIG}) "
             "-- this run will fail immediately."
         )
+
+
+def _print_models() -> None:
+    listed = list_all_models()
+    if not listed:
+        print(f"No providers configured. Add a key to ./.env or {GLOBAL_CONFIG} -- supported:")
+        for p in all_providers():
+            print(f"  {p.label:28} {p.key_envs[0]:22} {p.key_url}")
+        return
+    for pm in listed:
+        print(f"\n{pm.provider.label} ({len(pm.models)} models){'  -- ' + pm.error if pm.error else ''}")
+        for m in pm.models:
+            print(f"  {m.id}{'  [free]' if m.free else ''}")
+    print("\nUse one with --model <id>, or leave it out for automatic routing.")
 
 
 def _add_agent_options(parser: argparse.ArgumentParser) -> None:
@@ -107,12 +126,30 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument("--task", default=None, help="same as TASK, as a flag")
     _add_agent_options(new)
 
+    subparsers.add_parser("models", help="list the providers you have keys for and every model they offer")
+
+    srv = subparsers.add_parser("serve", help="chat server over stdin/stdout (JSON lines), used by the VS Code extension")
+    srv.add_argument("--repo", default=".", help="path to the repo to work on (default: current folder)")
+    _add_agent_options(srv)
+
     return parser
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.command == "models":
+        _print_models()
+        return
+
+    if args.command == "serve":
+        repo_path = Path(args.repo).resolve()
+        if not repo_path.is_dir():
+            print(f"error: no such directory: {repo_path}", file=sys.stderr)
+            sys.exit(1)
+        asyncio.run(serve(str(repo_path), network=args.network, auto_approve=args.auto_approve, model=args.model))
+        return
 
     if args.command == "run":
         repo_path = Path(args.repo).resolve()

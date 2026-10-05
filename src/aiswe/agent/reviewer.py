@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import litellm
 
+from ..providers import completion_kwargs
+
 REVIEW_SYSTEM_PROMPT = (
     "You are reviewing a proposed code change before it is committed. You will be given "
     "the original task and the full diff. Check for: correctness (does it actually do what "
@@ -46,7 +48,7 @@ def review_diff(*, task: str, diff: str, author_model: str, reviewer_model: str)
 
     try:
         response = litellm.completion(
-            model=reviewer_model,
+            **completion_kwargs(reviewer_model),
             messages=[
                 {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},

@@ -21,26 +21,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-# Which env var(s) prove a provider is usable. litellm accepts either the
-# provider's own conventional name (checked against litellm's source directly
-# -- see model_router.py's edit history) or, for a couple, a documented
-# alternate. Add a new provider by adding one line here plus (optionally)
-# entries in MODEL_CATALOG -- everything else (skip-if-missing, chain
-# building, the CLI's billing banner) picks it up automatically.
-PROVIDER_KEY_ENV: dict[str, tuple[str, ...]] = {
-    "openrouter": ("OPENROUTER_API_KEY",),
-    "groq": ("GROQ_API_KEY",),
-    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-    "cerebras": ("CEREBRAS_API_KEY",),
-    "anthropic": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"),
-    "openai": ("OPENAI_API_KEY",),
-    "mistral": ("MISTRAL_API_KEY",),
-    "together_ai": ("TOGETHERAI_API_KEY",),
-    "fireworks_ai": ("FIREWORKS_AI_API_KEY",),
-    "deepinfra": ("DEEPINFRA_API_KEY",),
-    "xai": ("XAI_API_KEY",),
-    "cohere": ("COHERE_API_KEY",),
-}
+from .providers import PROVIDERS, auto_picks, configured_providers, is_free
+
+# Which env var(s) prove a provider is usable -- derived from providers.py,
+# the single registry of supported platforms (plus any custom endpoints).
+# Kept as a dict for callers that only need the key names.
+PROVIDER_KEY_ENV: dict[str, tuple[str, ...]] = {p.id: p.key_envs for p in PROVIDERS}
 
 
 @dataclass(frozen=True)
@@ -88,12 +74,9 @@ def _env_list(name: str) -> list[str] | None:
 
 
 def available_providers() -> set[str]:
-    """Providers whose API key is actually present and non-empty right now."""
-    return {
-        provider
-        for provider, key_envs in PROVIDER_KEY_ENV.items()
-        if any(os.environ.get(key_env, "").strip() for key_env in key_envs)
-    }
+    """Providers whose API key is actually present and non-empty right now
+    (custom endpoints count as soon as they're defined)."""
+    return {p.id for p in configured_providers()}
 
 
 def classify_task(task: str) -> str:
@@ -118,8 +101,14 @@ def _dedupe(items: list[str]) -> list[str]:
 def build_model_chain(task: str, override: str | None = None) -> list[str]:
     """Ordered list of litellm model ids to try in turn. An explicit --model
     (or $AISWE_MODEL) always wins and skips routing/fallback entirely --
-    including calling a paid model, since you named it yourself."""
-    if override:
+    including calling a paid model, since you named it yourself. "auto" (what
+    the editor's model picker sends) means route automatically.
+
+    Auto = the hand-verified MODEL_CATALOG entries for your providers first
+    (ordered by task difficulty), then providers.auto_picks(): good coding
+    models listed live from every other configured platform -- so a key for
+    any supported provider, or a custom endpoint, is enough on its own."""
+    if override and override != "auto":
         return [override]
 
     env_override = os.environ.get("AISWE_MODEL")
@@ -142,6 +131,8 @@ def build_model_chain(task: str, override: str | None = None) -> list[str]:
         fast += [m.id for m in candidates if m.tier == "fast" and not m.free]
 
     chain = (strong + fast) if classify_task(task) == "complex" else (fast + strong)
+    if not (strong_override or fast_override):
+        chain += auto_picks()
     chain = _dedupe(chain)
 
     if not chain:
@@ -177,4 +168,4 @@ def is_free_model(model_id: str) -> bool:
     for m in MODEL_CATALOG:
         if m.id == model_id:
             return m.free
-    return model_id.endswith(":free")  # OpenRouter's own convention, at least
+    return is_free(model_id)  # live listing's pricing, ":free", or a free-tier platform
