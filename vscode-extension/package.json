@@ -36,6 +36,7 @@
     },
     "commands": [
       { "command": "aiswe.newChat", "title": "New Chat", "category": "aiswe", "icon": "$(add)" },
+      { "command": "aiswe.securityAudit", "title": "Security Audit of This Repo", "category": "aiswe", "icon": "$(shield)" },
       { "command": "aiswe.manageKeys", "title": "Models & API Keys", "category": "aiswe", "icon": "$(key)" },
       { "command": "aiswe.cancel", "title": "Stop", "category": "aiswe", "icon": "$(debug-stop)" },
       { "command": "aiswe.restart", "title": "Restart Agent", "category": "aiswe", "icon": "$(refresh)" },
@@ -44,8 +45,9 @@
     "menus": {
       "view/title": [
         { "command": "aiswe.newChat", "when": "view == aiswe.chat", "group": "navigation@1" },
-        { "command": "aiswe.manageKeys", "when": "view == aiswe.chat", "group": "navigation@2" },
-        { "command": "aiswe.showLog", "when": "view == aiswe.chat", "group": "navigation@3" },
+        { "command": "aiswe.securityAudit", "when": "view == aiswe.chat", "group": "navigation@2" },
+        { "command": "aiswe.manageKeys", "when": "view == aiswe.chat", "group": "navigation@3" },
+        { "command": "aiswe.showLog", "when": "view == aiswe.chat", "group": "navigation@4" },
         { "command": "aiswe.restart", "when": "view == aiswe.chat", "group": "overflow" }
       ]
     },

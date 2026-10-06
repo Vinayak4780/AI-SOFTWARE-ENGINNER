@@ -13,6 +13,7 @@
   const contextLabel = document.getElementById("context-label");
   const contextRow = document.getElementById("context-row");
   const modelSelect = document.getElementById("model");
+  const securityMode = document.getElementById("security-mode");
   const settingsPane = document.getElementById("settings");
 
   let providers = []; // from the server's "models" event
@@ -87,6 +88,12 @@
   function addApproval(event) {
     const card = el("div", "approval");
     card.appendChild(el("div", "approval-title", `Allow ${event.tool}?`));
+    if (event.warnings && event.warnings.length) {
+      card.classList.add("warned");
+      const list = el("ul", "approval-warnings");
+      for (const w of event.warnings) list.appendChild(el("li", "", w));
+      card.appendChild(list);
+    }
     card.appendChild(renderDiffText(event.description));
     const row = el("div", "approval-actions");
     const approve = el("button", "", "Approve");
@@ -186,7 +193,10 @@
   function submit() {
     const text = input.value.trim();
     if (!text || busy) return;
-    vscode.postMessage({ kind: "send", text, includeContext: includeContext.checked, model: selectedModel });
+    vscode.postMessage({
+      kind: "send", text, includeContext: includeContext.checked, model: selectedModel,
+      mode: securityMode.checked ? "security" : "default",
+    });
     input.value = "";
   }
 
@@ -296,6 +306,7 @@
       const saved = savedKeys.includes(p.keyEnv);
       let status = "not set";
       if (p.configured) status = p.error ? "key set -- " + p.error : `${p.models.length} models`;
+      if (p.warning) row.appendChild(el("div", "provider-warning", p.warning));
       top.appendChild(el("span", "provider-status" + (p.configured && !p.error ? " ok" : p.error ? " bad" : ""), status));
       row.appendChild(top);
       const line = el("div", "provider-line");
@@ -329,6 +340,9 @@
     settingsPane.appendChild(el("p", "hint", "Ollama, LM Studio, vLLM, a company gateway… anything with an OpenAI-style /v1 API."));
     const customs = el("div", "custom-list");
     customEndpoints.forEach((c) => customs.appendChild(customRow(c)));
+    for (const p of providers.filter((p) => p.custom && p.warning)) {
+      settingsPane.appendChild(el("div", "provider-warning", p.warning));
+    }
     settingsPane.appendChild(customs);
     const add = el("button", "secondary", "+ Add endpoint");
     add.type = "button";

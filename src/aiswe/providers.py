@@ -23,6 +23,7 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -130,6 +131,17 @@ def _custom_endpoints() -> list[Provider]:
         out.append(Provider(provider_id, f"{e.get('name') or slug} (custom)", (key_env,), base,
                             litellm_native=False, key_optional=True))
     return out
+
+
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]", "host.docker.internal"}
+
+
+def transport_warning(provider: Provider) -> str | None:
+    """Plain http to anything but this machine sends the API key and your code unencrypted."""
+    parsed = urllib.parse.urlparse(provider.base_url())
+    if parsed.scheme == "http" and (parsed.hostname or "") not in _LOCAL_HOSTS:
+        return f"{provider.label} uses plain http to {parsed.hostname} -- the API key and your code travel unencrypted. Use https."
+    return None
 
 
 def all_providers() -> list[Provider]:

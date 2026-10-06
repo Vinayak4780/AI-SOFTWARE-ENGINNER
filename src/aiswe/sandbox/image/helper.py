@@ -21,6 +21,14 @@ def _resolve(path: str) -> Path:
     return candidate
 
 
+def _resolve_writable(path: str) -> Path:
+    candidate = _resolve(path)
+    git_dir = WORKDIR / ".git"
+    if candidate == git_dir or git_dir in candidate.parents:
+        raise ValueError(f"refusing to modify git internals: {path}")
+    return candidate
+
+
 def read_file(path, **_):
     p = _resolve(path)
     return {"ok": True, "content": p.read_text(errors="replace")}
@@ -74,7 +82,7 @@ def find_symbol(name, path=".", **_):
 
 
 def edit_file(path, old_string, new_string, **_):
-    p = _resolve(path)
+    p = _resolve_writable(path)
     text = p.read_text()
     count = text.count(old_string)
     if count == 0:
@@ -89,7 +97,7 @@ def edit_file(path, old_string, new_string, **_):
 
 
 def write_file(path, content, **_):
-    p = _resolve(path)
+    p = _resolve_writable(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content)
     return {"ok": True}

@@ -10,6 +10,7 @@ from __future__ import annotations
 import litellm
 
 from ..providers import completion_kwargs
+from ..security.redact import redact
 
 REVIEW_SYSTEM_PROMPT = (
     "You are reviewing a proposed code change before it is committed. You will be given "
@@ -44,7 +45,8 @@ def review_diff(*, task: str, diff: str, author_model: str, reviewer_model: str)
         if reviewer_model == author_model
         else ""
     )
-    prompt = f"Task: {task}\n\nProposed diff:\n```diff\n{diff}\n```\n\nReview this change.{self_review_note}"
+    safe_diff, _ = redact(diff)
+    prompt = f"Task: {task}\n\nProposed diff:\n```diff\n{safe_diff}\n```\n\nReview this change.{self_review_note}"
 
     try:
         response = litellm.completion(

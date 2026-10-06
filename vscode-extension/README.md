@@ -27,6 +27,11 @@ view.
   are marked. Refresh (&#x21bb;) re-fetches the lists.
 - The file you have open (and your selection, if any) is sent with your
   message -- untick "Include ..." to leave it out.
+- **Security**: the shield button runs a full security audit (ranked report);
+  tick *Security mode* to have any message handled as a security review --
+  e.g. "secure the login API". Every commit passes a security gate (secret,
+  injection and dependency checks, plus an AI security review for sensitive
+  changes); its findings appear in yellow on the approval card.
 - Approval cards show each proposed action. Edits open in a diff view
   automatically; **Approve** / **Reject** in the chat.
 - **Stop** cancels the running message; **New Chat** (+) forgets the conversation.

@@ -273,7 +273,17 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
     const ctx = m.includeContext ? this.editorContext() : undefined;
     this.post({ kind: "user", text, contextLabel: this.contextLabel(ctx) });
     const model = String(m.model || this.context.globalState.get<string>(MODEL_STATE, "auto"));
-    backend.send({ type: "message", text, context: ctx, model });
+    const mode = m.mode === "security" ? "security" : "default";
+    backend.send({ type: "message", text, context: ctx, model, mode });
+  }
+
+  securityAudit(): void {
+    if (this.busy) {
+      vscode.window.showInformationMessage("aiswe is still working -- stop it first.");
+      return;
+    }
+    vscode.commands.executeCommand("aiswe.chat.focus");
+    this.sendMessage({ text: "Run a full security audit of this repository and give me a ranked report. Don't edit files.", mode: "security" });
   }
 
   showSettings(): void {
@@ -327,8 +337,9 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
     <button type="button" id="refresh-models" class="icon" title="Refresh model list">&#x21bb;</button>
     <button type="button" id="open-settings" class="icon" title="Models &amp; API keys">&#x2699;</button>
   </div>
-  <div id="context-row">
-    <label><input type="checkbox" id="include-context" checked> <span id="context-label"></span></label>
+  <div id="options-row">
+    <label id="context-row"><input type="checkbox" id="include-context" checked> <span id="context-label"></span></label>
+    <label title="Run messages as a security review/audit: scanners + an AI security engineer"><input type="checkbox" id="security-mode"> Security mode</label>
   </div>
   <textarea id="input" rows="3" placeholder="Ask or describe a change… (Enter to send, Shift+Enter for a new line)"></textarea>
   <div id="actions">
@@ -359,6 +370,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider("aiswe.chat", provider, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand("aiswe.newChat", () => provider.newChat()),
     vscode.commands.registerCommand("aiswe.manageKeys", () => provider.showSettings()),
+    vscode.commands.registerCommand("aiswe.securityAudit", () => provider.securityAudit()),
     vscode.commands.registerCommand("aiswe.cancel", () => provider.cancel()),
     vscode.commands.registerCommand("aiswe.restart", () => provider.restart()),
     vscode.commands.registerCommand("aiswe.showLog", () => log.show()),

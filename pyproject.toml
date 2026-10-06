@@ -27,4 +27,4 @@ where = ["src"]
 # The sandbox image's build context ships inside the package, so a plain
 # (non-editable) install can still build the image.
 [tool.setuptools.package-data]
-"aiswe.sandbox" = ["image/Dockerfile", "image/helper.py"]
+"aiswe.sandbox" = ["image/Dockerfile", "image/helper.py", "image/semgrep-rules.yml"]

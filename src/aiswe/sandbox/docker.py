@@ -25,6 +25,7 @@ IMAGE_NAME = "aiswe-sandbox:latest"
 DOCKER_DIR = Path(__file__).resolve().parent / "image"
 HELPER_PATH_IN_CONTAINER = "/usr/local/bin/aiswe_helper.py"
 DEFAULT_RUNTIME = os.environ.get("AISWE_DOCKER_RUNTIME", "runc")
+SANDBOX_USER = "sandboxuser"  # uid 1000, created in image/Dockerfile
 
 
 class SandboxError(RuntimeError):
@@ -80,21 +81,45 @@ class Sandbox:
             "--memory", self.memory,
             "--cpus", self.cpus,
             "--network", "bridge" if self.network else "none",
+            # Read-only image filesystem; only /tmp and the home dir are writable
+            # (both wiped with the container) -- plus the repo itself.
+            "--read-only",
+            "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=512m",
+            "--tmpfs", f"/home/{SANDBOX_USER}:rw,exec,nosuid,nodev,size=512m,uid=1000,gid=1000,mode=700",
             "-v", f"{self.repo_path}:/workspace",
+            *self._protected_git_mounts(),
             "-w", "/workspace",
         ]
-        # Explicit allowlist only -- never blanket-forward the host environment
-        # into the sandbox. GH_TOKEN/GITHUB_TOKEN are what `gh` (tools/github.py)
-        # authenticates with inside the container.
-        for env_var in ("GH_TOKEN", "GITHUB_TOKEN"):
-            value = os.environ.get(env_var)
-            if value:
-                cmd += ["-e", f"{env_var}={value}"]
+        # No host environment is forwarded into the container -- in particular
+        # not GH_TOKEN/GITHUB_TOKEN: those are passed only to the specific gh/git
+        # commands that need them (run_shell(..., env=...), see tools/github.py),
+        # so arbitrary model-run commands can't read them.
         cmd += [IMAGE_NAME, "sleep", "infinity"]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise SandboxError(f"failed to start sandbox container:\n{result.stderr}")
         self._started = True
+        # ~/.gitconfig lives on the fresh tmpfs home, so git's ownership check
+        # for the bind-mounted repo is relaxed here rather than in the image.
+        trust = self.run_shell("git config --global --add safe.directory /workspace", timeout=30)
+        if trust.exit_code != 0:
+            raise SandboxError(f"failed to configure git in sandbox:\n{trust.stderr}")
+
+    def _protected_git_mounts(self) -> list[str]:
+        """.git/config and .git/hooks mounted read-only over the writable repo.
+        Both can make *the host* run code -- core.fsmonitor/core.hooksPath in
+        config fire on any `git status` (which editors run constantly), hooks on
+        the next host commit -- so a model must never be able to write them.
+        Commits still work: they only write objects, refs and the index."""
+        git_dir = Path(self.repo_path) / ".git"
+        if not git_dir.is_dir():  # not a repo root (or a worktree's .git file)
+            return []
+        (git_dir / "hooks").mkdir(exist_ok=True)
+        mounts = []
+        for name in ("config", "hooks"):
+            if (git_dir / name).exists():
+                mounts += ["-v", f"{git_dir / name}:/workspace/.git/{name}:ro"]
+        return mounts
 
     def prepare_git(self, name: str, email: str, *, init: bool) -> None:
         """Give the container a git identity (its ~/.gitconfig only -- a repo's
@@ -127,10 +152,14 @@ class Sandbox:
     def __exit__(self, *exc: object) -> None:
         self.stop()
 
-    def run_shell(self, command: str, timeout: int = 120) -> ExecResult:
+    def run_shell(self, command: str, timeout: int = 120, env: tuple[str, ...] = ()) -> ExecResult:
+        """`env`: names of host environment variables to pass to this one
+        command only (`docker exec -e NAME` reads the value from our own
+        environment, so it never appears on a command line)."""
+        env_args = [arg for name in env if os.environ.get(name) for arg in ("-e", name)]
         try:
             result = subprocess.run(
-                ["docker", "exec", self.container_name, "sh", "-c", command],
+                ["docker", "exec", *env_args, self.container_name, "sh", "-c", command],
                 capture_output=True,
                 text=True,
                 timeout=timeout,

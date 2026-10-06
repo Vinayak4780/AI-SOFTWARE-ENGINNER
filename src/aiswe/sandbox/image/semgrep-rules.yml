@@ -1,0 +1,185 @@
+# aiswe's own semgrep rules: a small, offline set of high-signal checks for
+# the classic injection / unsafe-API mistakes, across the languages aiswe
+# writes most. Run by security/scanners.py inside the sandbox.
+# Severity: ERROR -> blocks a commit until fixed, WARNING -> reported, INFO -> noted.
+rules:
+  # ---------------- Python ----------------
+  - id: py-subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: subprocess with shell=True -- command injection if any part of the command comes from input. Pass an argument list without shell=True.
+    pattern: subprocess.$FUNC(..., shell=True, ...)
+
+  - id: py-os-system-dynamic
+    languages: [python]
+    severity: ERROR
+    message: os.system/os.popen with a non-constant command -- command injection. Use subprocess.run([...]) with an argument list.
+    patterns:
+      - pattern-either:
+          - pattern: os.system($CMD)
+          - pattern: os.popen($CMD, ...)
+      - pattern-not: os.system("...")
+      - pattern-not: os.popen("...", ...)
+
+  - id: py-eval-exec-dynamic
+    languages: [python]
+    severity: ERROR
+    message: eval/exec on a non-constant value -- arbitrary code execution. Parse the data instead (json, ast.literal_eval).
+    patterns:
+      - pattern-either:
+          - pattern: eval($X, ...)
+          - pattern: exec($X, ...)
+      - pattern-not: eval("...", ...)
+      - pattern-not: exec("...", ...)
+
+  - id: py-unsafe-deserialization
+    languages: [python]
+    severity: WARNING
+    message: pickle/marshal/dill deserialization runs code from the data -- never use it on untrusted input. Prefer json.
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: marshal.loads(...)
+      - pattern: dill.loads(...)
+
+  - id: py-yaml-unsafe-load
+    languages: [python]
+    severity: ERROR
+    message: yaml.load without SafeLoader can construct arbitrary objects. Use yaml.safe_load.
+    pattern-either:
+      - patterns:
+          - pattern: yaml.load(...)
+          - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=SafeLoader, ...)
+          - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader, ...)
+      - pattern: yaml.unsafe_load(...)
+
+  - id: py-sql-string-building
+    languages: [python]
+    severity: ERROR
+    message: SQL built with string formatting -- SQL injection. Use parameters, e.g. cursor.execute("... WHERE id = %s", (id,)).
+    pattern-either:
+      - pattern: $CUR.execute("..." % ..., ...)
+      - pattern: $CUR.execute("...".format(...), ...)
+      - pattern: $CUR.execute(f"...", ...)
+      - pattern: $CUR.execute("..." + $X, ...)
+      - pattern: $CUR.executemany(f"...", ...)
+      - pattern: $CUR.executescript(f"...")
+
+  - id: py-tls-verify-disabled
+    languages: [python]
+    severity: WARNING
+    message: TLS certificate verification disabled -- traffic can be intercepted.
+    pattern-either:
+      - pattern: requests.$M(..., verify=False, ...)
+      - pattern: httpx.$M(..., verify=False, ...)
+      - pattern: ssl._create_unverified_context(...)
+
+  - id: py-flask-debug
+    languages: [python]
+    severity: WARNING
+    message: Flask debug mode exposes an interactive debugger (remote code execution) -- never enable it outside local development.
+    pattern: $APP.run(..., debug=True, ...)
+
+  - id: py-jwt-signature-not-verified
+    languages: [python]
+    severity: ERROR
+    message: JWT decoded without verifying the signature -- anyone can forge tokens.
+    pattern-either:
+      - pattern: 'jwt.decode(..., options={..., "verify_signature": False, ...}, ...)'
+      - pattern: jwt.decode(..., verify=False, ...)
+
+  - id: py-weak-hash
+    languages: [python]
+    severity: INFO
+    message: MD5/SHA-1 are broken for security purposes (passwords, signatures). Use hashlib.sha256, or bcrypt/argon2/scrypt for passwords.
+    pattern-either:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.sha1(...)
+
+  - id: py-insecure-tempfile
+    languages: [python]
+    severity: WARNING
+    message: tempfile.mktemp is race-prone (another process can create the file first). Use tempfile.mkstemp or NamedTemporaryFile.
+    pattern: tempfile.mktemp(...)
+
+  # ---------------- JavaScript / TypeScript ----------------
+  - id: js-eval-dynamic
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: eval / new Function on a non-constant value -- arbitrary code execution.
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: new Function(...)
+      - pattern-not: eval("...")
+
+  - id: js-child-process-exec
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: child_process.exec runs the string through a shell -- command injection. Use execFile/spawn with an argument array.
+    pattern-either:
+      - pattern: child_process.exec(...)
+      - pattern: child_process.execSync(...)
+      - pattern: require("child_process").exec(...)
+      - pattern: require("child_process").execSync(...)
+
+  - id: js-sql-template-literal
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: SQL built with a template literal -- SQL injection. Use parameter placeholders.
+    pattern-either:
+      - pattern: $DB.query(`...${...}...`, ...)
+      - pattern: $DB.execute(`...${...}...`, ...)
+      - pattern: $DB.raw(`...${...}...`, ...)
+
+  - id: js-dom-xss
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Assigning non-constant HTML -- cross-site scripting if it contains user input. Use textContent or sanitize.
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = $X
+          - pattern: $EL.outerHTML = $X
+          - pattern: document.write($X)
+      - pattern-not: $EL.innerHTML = "..."
+      - pattern-not: $EL.outerHTML = "..."
+      - pattern-not: document.write("...")
+
+  - id: js-tls-verify-disabled
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: TLS certificate verification disabled -- traffic can be intercepted.
+    pattern-either:
+      - pattern: |
+          {..., rejectUnauthorized: false, ...}
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+
+  # ---------------- Go / Java / C ----------------
+  - id: go-sql-sprintf
+    languages: [go]
+    severity: ERROR
+    message: SQL built with fmt.Sprintf -- SQL injection. Use query placeholders.
+    pattern-either:
+      - pattern: $DB.Query(fmt.Sprintf(...), ...)
+      - pattern: $DB.Exec(fmt.Sprintf(...), ...)
+      - pattern: $DB.QueryRow(fmt.Sprintf(...), ...)
+
+  - id: java-sql-concatenation
+    languages: [java]
+    severity: ERROR
+    message: SQL built by string concatenation -- SQL injection. Use PreparedStatement parameters.
+    pattern-either:
+      - pattern: $S.executeQuery("..." + $X)
+      - pattern: $S.execute("..." + $X)
+      - pattern: $S.executeUpdate("..." + $X)
+
+  - id: c-unsafe-string-functions
+    languages: [c, cpp]
+    severity: WARNING
+    message: Unbounded string function -- buffer overflow risk. Use fgets/snprintf/strncpy-with-termination or a safe string type.
+    pattern-either:
+      - pattern: gets(...)
+      - pattern: strcpy(...)
+      - pattern: strcat(...)
+      - pattern: sprintf(...)

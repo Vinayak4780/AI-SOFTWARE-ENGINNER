@@ -21,6 +21,12 @@ src/aiswe/
   agent/
     developer.py        AgentSession (the multi-turn tool-calling loop) + planning phase
     reviewer.py          second-model review gate on every commit attempt
+    security.py          secure-coding rules, security commit gate, security review, audit mode
+  security/
+    redact.py            strips secrets from everything sent to a model provider
+    policy.py            protected/secret/sensitive paths, findings, what blocks a commit
+    scanners.py          gitleaks + bandit + semgrep, run in the sandbox
+    deps.py              new dependencies: exist on PyPI/npm? known-vulnerable (OSV)?
   tools/
     filesystem.py        read_file / list_dir / edit_file / write_file
     terminal.py           run_shell / run_tests
@@ -28,9 +34,11 @@ src/aiswe/
     code_search.py         search_code (substring) / find_symbol (AST-based)
     github.py               git_push / create_pull_request / get_issue / comment_issue
     memory.py               update_repo_notes
+    security.py             security_scan (lets the model run the scanners)
   sandbox/
     docker.py              the per-task Docker sandbox runtime
-    image/Dockerfile        sandbox image (Python, git, gh CLI) -- ships inside the package
+    image/Dockerfile        sandbox image (Python, git, gh CLI, gitleaks, bandit, semgrep) -- ships inside the package
+    image/semgrep-rules.yml  aiswe's own offline semgrep rules (injection / unsafe APIs)
     image/helper.py         in-container JSON command helper (file/git/AST-symbol ops)
   memory/
     repo_memory.py          reads/writes .aiswe/repo-notes.md
@@ -86,6 +94,59 @@ PLAN.md's Phase 3). Nothing is stubbed out ahead of being implemented.
   runs a fixed task set through the real CLI against fresh scratch repos and
   reports pass/fail per task -- use it to check whether a prompt/model/routing
   change actually helped before assuming it did.
+
+## Security
+
+Two goals: the agent itself can't hurt your machine or leak your secrets, and
+the code it writes is checked for vulnerabilities before it's committed.
+
+**Protecting you from the agent**
+- Sandbox: ephemeral container, all capabilities dropped, no new privileges,
+  non-root user, process/memory/CPU limits, **read-only root filesystem**
+  (only `/tmp` and home are writable tmpfs), no network unless `--network`,
+  base image pinned by digest, gitleaks pinned by SHA-256.
+- **`.git/config` and `.git/hooks` are mounted read-only.** They can make your
+  *host* run code (`core.fsmonitor` fires on any `git status`, which editors
+  run constantly; hooks fire on your next commit), so the model can't write
+  them -- not even via `run_shell`. New repos are `git init`-ed on the host
+  first so this protection applies from the first run.
+- Edits to files your machine or CI executes (`.vscode/`, `.github/workflows/`,
+  `Makefile`, `package.json`, `setup.py`, ...) are flagged on the approval card.
+- **Secrets never reach the model provider:** every tool result, diff and
+  repo-notes file is redacted (API keys, tokens, private keys, passwords in
+  URLs/assignments). Reading a secrets file (`.env`, `*.pem`, `id_rsa`, ...)
+  always asks first, even with `--yes`; writing a `[REDACTED:...]` placeholder
+  back into a file is refused (it would destroy the real secret).
+- `GITHUB_TOKEN` is passed only to the fixed `gh`/`git push` commands, never to
+  the container, so model-run shell commands can't read it.
+- Prompt injection: file contents, GitHub issues and repo notes are passed as
+  untrusted data, and the model is told not to follow instructions in them.
+- Approval previews are never truncated. With `--yes --network`, shell and
+  GitHub actions still ask (set `AISWE_ALLOW_UNATTENDED_NETWORK=1` to skip).
+- Custom endpoints over plain `http://` to a non-local host get a warning (the
+  key and your code would travel unencrypted).
+
+**Securing the code it writes**
+- Secure-coding rules are part of every task's system prompt.
+- **Security gate on every commit:** gitleaks (secrets), bandit (Python) and
+  aiswe's semgrep rules (SQL/command injection, eval, unsafe deserialization,
+  disabled TLS, XSS... across Python, JS/TS, Go, Java, C) scan the changed
+  files; new dependencies are checked to **exist** on PyPI/npm (models invent
+  package names that attackers then register) and against the OSV
+  vulnerability database. Changes touching auth, crypto, SQL, subprocesses,
+  file paths, uploads, CI config etc. also get an AI **security review**.
+  HIGH findings go back to the model to fix (2 rounds), then to you on the
+  approval card. The gate **fails closed**: if a check can't run, an
+  unattended (`--yes`) commit is refused instead of waved through.
+- **Audit mode** -- `aiswe audit` (report only), `aiswe audit --fix` (patch,
+  add security tests, run them, commit), `aiswe audit "the login API"` to
+  focus; in VS Code, the shield button or the *Security mode* checkbox.
+- `security_scan` is also a tool the model can use mid-task.
+
+Limits: scanners give leads, not proof, and work best for Python today
+(other languages get semgrep and gitleaks). The AI review catches logic flaws
+(missing auth checks, rate limiting) that scanners can't, but it's a model --
+it can miss things. Treat this as a strong safety net, not a guarantee.
 
 ## Why no Claude
 
@@ -192,6 +253,14 @@ It runs `python -m aiswe serve` in your workspace folder, so aiswe must be
 pip-installed into the Python the `aiswe.pythonPath` setting points at.
 `aiswe serve` speaks JSON lines over stdin/stdout -- the protocol is
 documented at the top of `server.py`, so other editors can reuse it.
+
+Security audit:
+
+```powershell
+aiswe audit                       # ranked report, no edits
+aiswe audit "the login API"       # focus on one area
+aiswe audit --fix                 # also patch, add security tests, run them, commit
+```
 
 Flags:
 - `--network` -- allow network access inside the sandbox (off by default).

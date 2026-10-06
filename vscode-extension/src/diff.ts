@@ -43,7 +43,12 @@ export async function showProposedDiff(
   args: { path?: string; old_string?: string; new_string?: string; content?: string },
 ): Promise<void> {
   const rel = toRelative(args.path ?? "");
-  const abs = path.join(repo, rel);
+  const abs = path.resolve(repo, rel);
+  const inside = path.relative(repo, abs);
+  if (inside.startsWith("..") || path.isAbsolute(inside)) {
+    vscode.window.showWarningMessage(`aiswe: refusing to preview ${args.path} -- it points outside the workspace.`);
+    return;
+  }
   const exists = fs.existsSync(abs);
   const current = exists ? fs.readFileSync(abs, "utf8") : "";
 

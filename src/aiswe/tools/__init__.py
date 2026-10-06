@@ -8,9 +8,9 @@ from __future__ import annotations
 from typing import Any
 
 from ..sandbox import Sandbox
-from . import code_search, filesystem, git, github, memory, terminal
+from . import code_search, filesystem, git, github, memory, security, terminal
 
-_MODULES = [filesystem, terminal, git, code_search, memory, github]
+_MODULES = [filesystem, terminal, git, code_search, security, memory, github]
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [schema for m in _MODULES for schema in m.SCHEMAS]
 

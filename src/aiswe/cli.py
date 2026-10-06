@@ -5,6 +5,8 @@ Usage (run from inside the folder you want the agent to work on):
     aiswe run               # prompts for the task
     aiswe new FOLDER "description" [--network] [--yes] [--model NAME]
                             # create a brand-new project from scratch in FOLDER
+    aiswe audit [--fix] [--repo PATH] [--network] [--yes] [--model NAME]
+                            # security audit of the repo (report, or --fix to patch + test + commit)
     aiswe models              # list configured providers and their models
     aiswe serve [--repo PATH] [--network] [--yes] [--model NAME]
                             # JSON-lines chat server for editor front-ends (see server.py)
@@ -126,6 +128,12 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument("--task", default=None, help="same as TASK, as a flag")
     _add_agent_options(new)
 
+    audit = subparsers.add_parser("audit", help="security audit of a repo: scanners + AI review, ranked report")
+    audit.add_argument("task_text", nargs="?", metavar="FOCUS", help="optional focus, e.g. 'the login API'")
+    audit.add_argument("--repo", default=".", help="path to the repo to audit (default: current folder)")
+    audit.add_argument("--fix", action="store_true", help="also fix confirmed issues, add security tests, run them and commit")
+    _add_agent_options(audit)
+
     subparsers.add_parser("models", help="list the providers you have keys for and every model they offer")
 
     srv = subparsers.add_parser("serve", help="chat server over stdin/stdout (JSON lines), used by the VS Code extension")
@@ -149,6 +157,21 @@ def main() -> None:
             print(f"error: no such directory: {repo_path}", file=sys.stderr)
             sys.exit(1)
         asyncio.run(serve(str(repo_path), network=args.network, auto_approve=args.auto_approve, model=args.model))
+        return
+
+    if args.command == "audit":
+        repo_path = Path(args.repo).resolve()
+        if not repo_path.is_dir():
+            print(f"error: no such directory: {repo_path}", file=sys.stderr)
+            sys.exit(1)
+        focus = args.task_text or "the whole repository"
+        request = f"Audit {focus} for security vulnerabilities." + (
+            " Then fix the confirmed issues, add tests proving each fix, run them, and commit."
+            if args.fix else " Report only -- do not edit any files."
+        )
+        _print_billing_banner()
+        asyncio.run(run_task(str(repo_path), request, network=args.network, auto_approve=args.auto_approve,
+                             model=args.model, mode="security"))
         return
 
     if args.command == "run":

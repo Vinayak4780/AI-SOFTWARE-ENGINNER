@@ -6,10 +6,11 @@ only -- anything else that prints (litellm, stray print()s, child processes)
 is redirected to stderr, which a front-end should show as a log.
 
 Client -> server:
-  {"type": "message", "text": "...", "context": {...}?, "model": "..."?}   start a turn
+  {"type": "message", "text": "...", "context": {...}?, "model": "..."?, "mode": "security"?}   start a turn
       context (all optional): {"file": "rel/path.py", "language": "python",
                                "selection": "...", "startLine": 10, "endLine": 20}
       model: an id from the "models" event, or "auto" (default) for automatic routing
+      mode: "security" runs the message as a security audit
   {"type": "list_models", "refresh": false}               ask for a "models" event
   {"type": "approval", "id": N, "approved": true|false}   answer an approval_request
   {"type": "cancel"}                                      stop the running turn
@@ -19,11 +20,11 @@ Client -> server:
 Server -> client:
   {"type": "ready", "repo": "...", "version": "..."}
   every AgentSession event (log, assistant, tool_call, tool_result, done)
-  {"type": "approval_request", "id": N, "tool": "...", "args": {...}, "description": "..."}
+  {"type": "approval_request", "id": N, "tool": "...", "args": {...}, "description": "...", "warnings": [...]}
   {"type": "turn_end"}                    a message's turn finished (always sent, even on error)
   {"type": "reset_done"}
   {"type": "models", "providers": [{"id", "label", "keyEnv", "keyUrl", "configured",
-                                    "custom", "error", "models": [{"id", "name", "free"}]}]}
+                                    "custom", "error", "warning", "models": [{"id", "name", "free"}]}]}
   {"type": "error", "text": "..."}
 """
 
@@ -40,7 +41,7 @@ from typing import Any, TextIO
 from . import __version__
 from .agent import AgentSession
 from .approval import describe_call
-from .providers import all_providers, list_all_models
+from .providers import all_providers, list_all_models, transport_warning
 
 
 class _Protocol:
@@ -91,6 +92,7 @@ def _models_event(refresh: bool) -> dict[str, Any]:
             "id": p.id, "label": p.label, "keyEnv": p.key_envs[0], "keyUrl": p.key_url,
             "configured": p.configured(), "custom": p.id.startswith("custom-"),
             "error": pm.error if pm else None,
+            "warning": transport_warning(p),
             "models": [{"id": m.id, "name": m.name, "free": m.free} for m in pm.models] if pm else [],
         })
     return {"type": "models", "providers": providers}
@@ -121,13 +123,13 @@ async def serve(repo_path: str, *, network: bool = False, auto_approve: bool = F
     pending: dict[int, asyncio.Future[bool]] = {}
     ids = itertools.count(1)
 
-    async def approver(name: str, args: dict[str, Any]) -> bool:
+    async def approver(name: str, args: dict[str, Any], warnings: list[str]) -> bool:
         request_id = next(ids)
         future: asyncio.Future[bool] = loop.create_future()
         pending[request_id] = future
         protocol.send({
             "type": "approval_request", "id": request_id, "tool": name,
-            "args": args, "description": describe_call(name, args),
+            "args": args, "description": describe_call(name, args), "warnings": warnings,
         })
         try:
             return await future
@@ -149,9 +151,9 @@ async def serve(repo_path: str, *, network: bool = False, auto_approve: bool = F
         chat=True,
     )
 
-    async def run_turn(text: str, model: str | None) -> None:
+    async def run_turn(text: str, model: str | None, mode: str) -> None:
         try:
-            await session.send(text, model=model)
+            await session.send(text, model=model, mode=mode)
         except Exception as e:  # noqa: BLE001 -- report and keep serving
             protocol.send({"type": "error", "text": f"{type(e).__name__}: {e}"})
         finally:
@@ -179,7 +181,7 @@ async def serve(repo_path: str, *, network: bool = False, auto_approve: bool = F
                     protocol.send({"type": "error", "text": "still working on the previous message -- cancel it first"})
                     continue
                 text = _with_context(str(message.get("text", "")), message.get("context"))
-                turn = asyncio.create_task(run_turn(text, message.get("model") or None))
+                turn = asyncio.create_task(run_turn(text, message.get("model") or None, str(message.get("mode") or "default")))
             elif kind == "list_models":
                 async def send_models(refresh: bool) -> None:
                     protocol.send(await asyncio.to_thread(_models_event, refresh))
