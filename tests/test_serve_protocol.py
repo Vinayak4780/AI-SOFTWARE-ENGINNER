@@ -152,6 +152,22 @@ def test_serve_protocol() -> None:
         events = _run_turn(proc, approve=True, model="custom-local/m1")
         assert any(e["type"] == "assistant" and e["text"].endswith(f"[openai/m1 @ {base_url}]") for e in events), events
 
+        # Every turn ends with the whole conversation, for the chat history.
+        assert [e["type"] for e in events[-2:]] == ["history", "turn_end"]
+        saved = events[-2]["messages"]
+        assert saved and all(m["role"] != "system" for m in saved)
+        assert sum(m["role"] == "user" and m["content"].endswith("create hello.txt") for m in saved) == 3
+
+        _send(proc, {"type": "reset"})
+        _read_until(proc, "reset_done")
+
+        # Reopening a saved chat: the agent gets the conversation back and continues it.
+        _send(proc, {"type": "restore", "messages": saved})
+        assert _read_until(proc, "restore_done")[-1]["count"] == len(saved)
+        events = _run_turn(proc, approve=True)
+        continued = next(e for e in events if e["type"] == "history")["messages"]
+        assert continued[:len(saved)] == saved and len(continued) > len(saved)
+
         _send(proc, {"type": "reset"})
         _read_until(proc, "reset_done")
         _send(proc, {"type": "bogus"})

@@ -15,14 +15,17 @@ Client -> server:
   {"type": "approval", "id": N, "approved": true|false}   answer an approval_request
   {"type": "cancel"}                                      stop the running turn
   {"type": "reset"}                                       forget the conversation
+  {"type": "restore", "messages": [...]}                  continue a saved conversation (from a "history" event)
   {"type": "shutdown"}                                    stop the sandbox and exit
 
 Server -> client:
   {"type": "ready", "repo": "...", "version": "..."}
   every AgentSession event (log, assistant, tool_call, tool_result, done)
   {"type": "approval_request", "id": N, "tool": "...", "args": {...}, "description": "...", "warnings": [...]}
+  {"type": "history", "messages": [...]}  the whole conversation (no system prompt), sent before every turn_end
   {"type": "turn_end"}                    a message's turn finished (always sent, even on error)
   {"type": "reset_done"}
+  {"type": "restore_done", "count": N}
   {"type": "models", "providers": [{"id", "label", "keyEnv", "keyUrl", "configured",
                                     "custom", "error", "warning", "models": [{"id", "name", "free"}]}]}
   {"type": "error", "text": "..."}
@@ -157,6 +160,7 @@ async def serve(repo_path: str, *, network: bool = False, auto_approve: bool = F
         except Exception as e:  # noqa: BLE001 -- report and keep serving
             protocol.send({"type": "error", "text": f"{type(e).__name__}: {e}"})
         finally:
+            protocol.send({"type": "history", "messages": session.export_messages()})
             protocol.send({"type": "turn_end"})
 
     turn: asyncio.Task | None = None
@@ -199,6 +203,13 @@ async def serve(repo_path: str, *, network: bool = False, auto_approve: bool = F
                     continue
                 session.reset()
                 protocol.send({"type": "reset_done"})
+            elif kind == "restore":
+                if busy:
+                    protocol.send({"type": "error", "text": "can't open another chat while a message is running -- cancel it first"})
+                    continue
+                saved = message.get("messages")
+                session.restore_messages(saved if isinstance(saved, list) else [])
+                protocol.send({"type": "restore_done", "count": len(session.export_messages())})
             elif kind == "shutdown":
                 break
             else:

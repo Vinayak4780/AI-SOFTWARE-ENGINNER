@@ -15,12 +15,17 @@
   const modelSelect = document.getElementById("model");
   const securityMode = document.getElementById("security-mode");
   const settingsPane = document.getElementById("settings");
+  const historyPane = document.getElementById("history");
 
   let providers = []; // from the server's "models" event
   let selectedModel = "auto";
   let savedKeys = []; // env var names saved in VS Code (never the values)
   let customEndpoints = []; // [{name, baseUrl, hasKey}]
   let backendError = ""; // why the server couldn't list models, if it couldn't
+  let chats = []; // saved chats for this workspace: [{id, title, created, updated}]
+  let currentChatId = null;
+  let historyFilter = "";
+  let replaying = false; // redrawing a saved chat: no focus stealing, no live approvals
 
   const toolRows = new Map(); // tool_call id -> <details>
   const openApprovals = new Map(); // approval id -> card element
@@ -115,7 +120,7 @@
     card.appendChild(row);
     openApprovals.set(event.id, card);
     append(card);
-    approve.focus();
+    if (!replaying) approve.focus();
   }
 
   function resolveApproval(id, outcome) {
@@ -152,12 +157,15 @@
       case "approval_request":
         addApproval(event);
         break;
+      case "approval_outcome": // only in saved chats
+        resolveApproval(event.id, event.approved ? "Approved" : "Rejected");
+        break;
       case "log":
         append(el("div", "log", event.text.trim()));
         break;
       case "error":
         append(el("div", "error", event.text));
-        if (!providers.length && !backendError) { // keep the first, most specific reason
+        if (!replaying && !providers.length && !backendError) { // keep the first, most specific reason
           backendError = event.text;
           modelSelect.disabled = false;
           if (!settingsPane.hidden) renderSettings();
@@ -260,6 +268,137 @@
     vscode.postMessage({ kind: "listModels", refresh: true });
   });
   document.getElementById("open-settings").addEventListener("click", () => toggleSettings(true));
+  document.getElementById("open-history").addEventListener("click", () => toggleHistory(historyPane.hidden));
+  document.getElementById("empty-history").addEventListener("click", () => toggleHistory(true));
+
+  // --- chat history -------------------------------------------------------
+
+  function toggleHistory(show) {
+    historyPane.hidden = !show;
+    if (show) settingsPane.hidden = true;
+    messages.hidden = show || !settingsPane.hidden;
+    if (show) {
+      renderHistory();
+      vscode.postMessage({ kind: "listChats" });
+    }
+  }
+
+  /** Redraws a saved chat from its transcript. */
+  function replay(items) {
+    replaying = true;
+    try {
+      for (const item of items) {
+        if (item.kind === "user") addUser(item.text, item.contextLabel);
+        else if (item.kind === "event") handleEvent(item.event);
+      }
+      // Approvals that were never answered (stopped, or VS Code closed).
+      for (const id of [...openApprovals.keys()]) resolveApproval(id, "Not answered");
+    } finally {
+      replaying = false;
+    }
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function when(time) {
+    const d = new Date(time);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const days = Math.floor((today.getTime() - new Date(d).setHours(0, 0, 0, 0)) / 86400000);
+    if (days <= 0) return { group: "Today", label: d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) };
+    if (days === 1) return { group: "Yesterday", label: d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) };
+    const label = d.toLocaleDateString([], { day: "numeric", month: "short" });
+    if (days < 7) return { group: "Previous 7 days", label };
+    if (days < 30) return { group: "Previous 30 days", label };
+    return { group: "Older", label: d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }) };
+  }
+
+  function chatRow(chat) {
+    const row = el("div", "chat-row" + (chat.id === currentChatId ? " current" : ""));
+    row.tabIndex = 0;
+    row.title = chat.title;
+    row.appendChild(el("span", "chat-title", chat.title));
+    row.appendChild(el("span", "chat-time", when(chat.updated).label));
+    const del = el("button", "icon chat-delete", "🗑");
+    del.type = "button";
+    del.title = "Delete this chat";
+    del.onclick = (e) => {
+      e.stopPropagation();
+      if (del.dataset.confirm) {
+        vscode.postMessage({ kind: "deleteChat", id: chat.id });
+        row.remove();
+        return;
+      }
+      del.dataset.confirm = "1";
+      del.textContent = "Delete?";
+      del.classList.add("confirm");
+      setTimeout(() => {
+        delete del.dataset.confirm;
+        del.textContent = "🗑";
+        del.classList.remove("confirm");
+      }, 3000);
+    };
+    row.appendChild(del);
+    const open = () => vscode.postMessage({ kind: "openChat", id: chat.id });
+    row.onclick = open;
+    row.onkeydown = (e) => {
+      if (e.key === "Enter") open();
+    };
+    return row;
+  }
+
+  function renderHistoryList(list) {
+    list.textContent = "";
+    const term = historyFilter.trim().toLowerCase();
+    const shown = chats.filter((c) => !term || c.title.toLowerCase().includes(term));
+    if (!shown.length) {
+      list.appendChild(el("p", "hint", chats.length ? "No chats match your search." : "No chats yet -- your conversations will show up here."));
+      return;
+    }
+    let group = "";
+    for (const chat of shown) {
+      const g = when(chat.updated).group;
+      if (g !== group) {
+        group = g;
+        list.appendChild(el("div", "chat-group", g));
+      }
+      list.appendChild(chatRow(chat));
+    }
+  }
+
+  function renderHistory() {
+    historyPane.textContent = "";
+    const head = el("div", "settings-head");
+    head.appendChild(el("h3", "", "Chat history"));
+    const close = el("button", "link", "Close");
+    close.type = "button";
+    close.onclick = () => toggleHistory(false);
+    head.appendChild(close);
+    historyPane.appendChild(head);
+
+    const newBtn = el("button", "", "+ New chat");
+    newBtn.type = "button";
+    newBtn.className = "new-chat";
+    newBtn.onclick = () => {
+      vscode.postMessage({ kind: "newChat" });
+      toggleHistory(false);
+    };
+    historyPane.appendChild(newBtn);
+
+    const search = el("input");
+    search.type = "search";
+    search.placeholder = "Search chats…";
+    search.value = historyFilter;
+    search.className = "chat-search";
+    historyPane.appendChild(search);
+
+    const list = el("div", "chat-list");
+    historyPane.appendChild(list);
+    search.addEventListener("input", () => {
+      historyFilter = search.value;
+      renderHistoryList(list);
+    });
+    renderHistoryList(list);
+  }
 
   // --- models & keys screen --------------------------------------------
 
@@ -293,6 +432,7 @@
 
   function toggleSettings(show) {
     settingsPane.hidden = !show;
+    if (show) historyPane.hidden = true;
     messages.hidden = show;
     if (show) renderSettings();
   }
@@ -492,6 +632,25 @@
         break;
       case "showSettings":
         toggleSettings(true);
+        break;
+      case "chatList":
+        chats = data.chats || [];
+        currentChatId = data.currentId;
+        if (!historyPane.hidden) {
+          const list = historyPane.querySelector(".chat-list");
+          if (list) renderHistoryList(list);
+          else renderHistory();
+        }
+        break;
+      case "showHistory":
+        toggleHistory(historyPane.hidden);
+        break;
+      case "hideHistory":
+        toggleHistory(false);
+        break;
+      case "replay":
+        toggleHistory(false);
+        replay(data.items || []);
         break;
     }
   });

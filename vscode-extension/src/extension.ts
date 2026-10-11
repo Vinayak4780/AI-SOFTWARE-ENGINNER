@@ -3,6 +3,10 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { Backend, BackendEvent } from "./backend";
 import { PROPOSED_SCHEME, ProposedContent, hasDiff, showProposedDiff } from "./diff";
+import { Chat, ChatStore, TranscriptItem, newChat, transcriptEvent } from "./history";
+
+// Backend events that are part of the conversation, kept in a chat's transcript.
+const RECORDED_EVENTS = new Set(["assistant", "tool_call", "tool_result", "approval_request", "log", "error", "done"]);
 
 const MAX_SELECTION_CHARS = 20000;
 // SecretStorage entries (encrypted by VS Code / the OS keychain).
@@ -31,12 +35,18 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
   private readonly approvals = new Map<number, { tool: string; args: any }>();
   private starting: Promise<Backend | undefined> | undefined;
   private readonly disposables: vscode.Disposable[] = [];
+  private readonly store: ChatStore;
+  private chat: Chat | undefined; // the chat on screen; created by its first message
+  // The server's conversation doesn't match `chat` (a reopened chat, or a
+  // fresh server process) -- send it the saved one before the next message.
+  private restorePending = false;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly log: vscode.OutputChannel,
     private readonly proposed: ProposedContent,
   ) {
+    this.store = new ChatStore((context.storageUri ?? context.globalStorageUri).fsPath);
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor(() => this.postContext()),
       vscode.window.onDidChangeTextEditorSelection(() => this.postContext()),
@@ -148,6 +158,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
     );
     backend.start();
     this.backend = backend;
+    this.restorePending = true;
     return backend;
   }
 
@@ -204,20 +215,86 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
           showProposedDiff(this.proposed, this.repo, event.tool, event.args).catch((e) => this.log.appendLine(String(e)));
         }
         break;
+      case "history":
+        if (this.chat && Array.isArray(event.messages)) this.chat.messages = event.messages;
+        return;
+      case "restore_done":
+        return;
       case "turn_end":
         this.setBusy(false);
+        this.saveChat();
         break;
-      case "exit":
+      case "exit": {
         this.backend = undefined;
         this.approvals.clear();
         if (this.busy) this.setBusy(false);
-        this.post({ kind: "event", event: { type: "error", text: `The agent process stopped (exit code ${event.code}). See "aiswe: Show Log".` } });
+        const error = { type: "error", text: `The agent process stopped (exit code ${event.code}). See "aiswe: Show Log".` };
+        this.record(transcriptEvent(error));
+        this.saveChat();
+        this.post({ kind: "event", event: error });
         return;
+      }
       case "error":
         if (this.busy && !this.backend?.running) this.setBusy(false);
         break;
     }
+    if (RECORDED_EVENTS.has(event.type)) this.record(transcriptEvent(event));
     this.post({ kind: "event", event });
+  }
+
+  // --- chat history -------------------------------------------------------
+
+  private record(item: TranscriptItem): void {
+    this.chat?.transcript.push(item);
+  }
+
+  private async saveChat(): Promise<void> {
+    if (!this.chat) return;
+    await this.store.save(this.chat);
+    await this.postChatList();
+  }
+
+  private async postChatList(): Promise<void> {
+    this.post({ kind: "chatList", chats: await this.store.list(), currentId: this.chat?.id ?? null });
+  }
+
+  private async openChat(id: string): Promise<void> {
+    if (this.busy) {
+      vscode.window.showInformationMessage("aiswe is still working -- stop it first.");
+      return;
+    }
+    if (this.chat?.id === id) {
+      this.post({ kind: "hideHistory" });
+      return;
+    }
+    const chat = await this.store.load(String(id));
+    if (!chat) {
+      vscode.window.showWarningMessage("That chat couldn't be loaded -- it may have been deleted.");
+      await this.postChatList();
+      return;
+    }
+    this.chat = chat;
+    this.restorePending = true; // the agent gets this conversation back with the next message
+    this.approvals.clear();
+    this.post({ kind: "clear" });
+    this.post({ kind: "replay", items: chat.transcript });
+    await this.postChatList();
+  }
+
+  private async deleteChat(id: string): Promise<void> {
+    if (this.chat?.id === id) {
+      if (this.busy) {
+        vscode.window.showInformationMessage("aiswe is still working on this chat -- stop it first.");
+        return;
+      }
+      this.newChat();
+    }
+    await this.store.delete(String(id));
+    await this.postChatList();
+  }
+
+  showHistory(): void {
+    this.post({ kind: "showHistory" });
   }
 
   private onWebviewMessage(m: any): void {
@@ -245,7 +322,19 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
         if (/^https:\/\//.test(String(m.url))) vscode.env.openExternal(vscode.Uri.parse(m.url));
         break;
       case "approve":
-        if (this.approvals.delete(m.id)) this.backend?.send({ type: "approval", id: m.id, approved: !!m.approved });
+        if (this.approvals.delete(m.id)) {
+          this.backend?.send({ type: "approval", id: m.id, approved: !!m.approved });
+          this.record({ kind: "event", event: { type: "approval_outcome", id: m.id, approved: !!m.approved } });
+        }
+        break;
+      case "listChats":
+        this.postChatList();
+        break;
+      case "openChat":
+        this.openChat(m.id);
+        break;
+      case "deleteChat":
+        this.deleteChat(m.id);
         break;
       case "viewDiff": {
         const a = this.approvals.get(m.id);
@@ -270,8 +359,17 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
       this.setBusy(false);
       return;
     }
+    if (!this.chat) {
+      this.chat = newChat(text);
+      this.restorePending = false;
+    } else if (this.restorePending) {
+      backend.send({ type: "restore", messages: this.chat.messages });
+      this.restorePending = false;
+    }
     const ctx = m.includeContext ? this.editorContext() : undefined;
-    this.post({ kind: "user", text, contextLabel: this.contextLabel(ctx) });
+    const contextLabel = this.contextLabel(ctx);
+    this.record({ kind: "user", text, contextLabel });
+    this.post({ kind: "user", text, contextLabel });
     const model = String(m.model || this.context.globalState.get<string>(MODEL_STATE, "auto"));
     const mode = m.mode === "security" ? "security" : "default";
     backend.send({ type: "message", text, context: ctx, model, mode });
@@ -300,14 +398,19 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
       return;
     }
     if (this.backend?.running) this.backend.send({ type: "reset" });
+    this.chat = undefined; // the old one is already saved; it stays in the history
+    this.restorePending = false;
     this.approvals.clear();
     this.post({ kind: "clear" });
+    this.postChatList();
   }
 
   restart(): void {
     this.stopBackend();
     this.setBusy(false);
+    this.chat = undefined;
     this.post({ kind: "clear" });
+    this.postChatList();
   }
 
   private html(webview: vscode.Webview, media: vscode.Uri): string {
@@ -328,13 +431,16 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
   <div id="empty">
     <h2>aiswe</h2>
     <p>Ask about your code or describe a change. The agent works in a sandbox and asks before it edits, runs commands or commits.</p>
+    <button type="button" id="empty-history" class="link">&#x1F552; Previous chats</button>
   </div>
 </div>
 <div id="settings" hidden></div>
+<div id="history" hidden></div>
 <form id="composer">
   <div id="model-row">
     <select id="model" title="Model"><option value="auto">Auto (best available, with fallback)</option></select>
     <button type="button" id="refresh-models" class="icon" title="Refresh model list">&#x21bb;</button>
+    <button type="button" id="open-history" class="icon" title="Chat history">&#x1F552;</button>
     <button type="button" id="open-settings" class="icon" title="Models &amp; API keys">&#x2699;</button>
   </div>
   <div id="options-row">
@@ -370,6 +476,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider("aiswe.chat", provider, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand("aiswe.newChat", () => provider.newChat()),
     vscode.commands.registerCommand("aiswe.manageKeys", () => provider.showSettings()),
+    vscode.commands.registerCommand("aiswe.showHistory", () => provider.showHistory()),
     vscode.commands.registerCommand("aiswe.securityAudit", () => provider.securityAudit()),
     vscode.commands.registerCommand("aiswe.cancel", () => provider.cancel()),
     vscode.commands.registerCommand("aiswe.restart", () => provider.restart()),

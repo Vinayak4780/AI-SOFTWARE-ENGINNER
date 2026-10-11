@@ -424,9 +424,12 @@ class AgentSession:
         self.log(f"[sandbox] started container {sandbox.container_name} (network={'on' if self.network else 'off'})")
         sandbox.prepare_git(*_git_identity(self.repo_path), init=init_in_sandbox)
 
-    def _initial_messages(self) -> list[dict[str, Any]]:
+    def _system_message(self) -> dict[str, Any]:
         system = SYSTEM_PROMPT + "\n\n" + SECURE_CODING_RULES + ("\n\n" + CHAT_PROMPT if self.chat else "")
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+        return {"role": "system", "content": system}
+
+    def _initial_messages(self) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = [self._system_message()]
         if self.new_project:
             messages.append({"role": "user", "content": NEW_PROJECT_PROMPT})
         notes = read_notes(self.repo_path)
@@ -450,6 +453,17 @@ class AgentSession:
     def reset(self) -> None:
         """Forget the conversation; the sandbox is kept for the next message."""
         self.messages = []
+
+    def export_messages(self) -> list[dict[str, Any]]:
+        """The conversation without the system prompt, for a front-end to save
+        as chat history (tool results in it are already redacted)."""
+        return [m for m in self.messages if m.get("role") != "system"]
+
+    def restore_messages(self, saved: list[dict[str, Any]]) -> None:
+        """Continue a saved conversation (from export_messages), under the
+        current system prompt rather than the one it was saved with."""
+        saved = [m for m in saved if isinstance(m, dict) and m.get("role") in ("user", "assistant", "tool")]
+        self.messages = [self._system_message(), *saved] if saved else []
 
     def close(self) -> None:
         if self.sandbox is not None:
