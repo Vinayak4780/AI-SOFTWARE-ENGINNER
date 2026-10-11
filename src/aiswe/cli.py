@@ -8,6 +8,8 @@ Usage (run from inside the folder you want the agent to work on):
     aiswe audit [--fix] [--repo PATH] [--network] [--yes] [--model NAME]
                             # security audit of the repo (report, or --fix to patch + test + commit)
     aiswe models              # list configured providers and their models
+    aiswe update [--no-extension] [--force]
+                            # get the latest aiswe from GitHub + reinstall the VS Code extension
     aiswe serve [--repo PATH] [--network] [--yes] [--model NAME]
                             # JSON-lines chat server for editor front-ends (see server.py)
 
@@ -140,6 +142,10 @@ def build_parser() -> argparse.ArgumentParser:
     srv.add_argument("--repo", default=".", help="path to the repo to work on (default: current folder)")
     _add_agent_options(srv)
 
+    upd = subparsers.add_parser("update", help="get the latest aiswe from GitHub and reinstall it and the VS Code extension")
+    upd.add_argument("--no-extension", action="store_true", help="update only aiswe, not the VS Code extension")
+    upd.add_argument("--force", action="store_true", help="rebuild the VS Code extension even if nothing changed")
+
     return parser
 
 
@@ -149,6 +155,12 @@ def main() -> None:
 
     if args.command == "models":
         _print_models()
+        return
+
+    if args.command == "update":
+        from .updater import main as update_main
+
+        update_main(skip_extension=args.no_extension, force=args.force)
         return
 
     if args.command == "serve":
