@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -81,7 +82,8 @@ SYSTEM_PROMPT = (
     "run commands, or commit through the tools you've been given -- there is no other "
     "way to affect the repository. Investigate before editing: read_file, search_code "
     "(substring), find_symbol (exact function/class definitions, prefer this over "
-    "search_code when you know the name), list_dir. Make small, reviewable edits. "
+    "search_code when you know the name), list_dir. When changing existing code, keep "
+    "edits focused and reviewable; when asked to build something new, build it completely. "
     "Always run the test suite with run_tests after making changes and before declaring "
     "the task done. A reviewer model checks every commit attempt before it reaches the "
     "human -- if it requests changes, address the feedback and call git_commit again. "
@@ -114,6 +116,62 @@ NEW_PROJECT_PROMPT = (
     "for one of those, still write the project but say clearly that you couldn't run it. "
     "Record the build/test commands with update_repo_notes, then git_commit the result."
 )
+
+# Build mode: requests to create something new (a website, an app, a tool...).
+# Short prompts like "make a food website" otherwise get the bare minimum, so
+# the model writes a feature checklist first, builds against a quality bar,
+# and has to check its work against the checklist before it may finish.
+BUILD_PROMPT = (
+    "BUILD MODE -- this request is to build something new. Build it like a product a real "
+    "person will use, not a demo:\n"
+    "- Deliver every item on the feature checklist, end to end. No placeholders, TODOs, "
+    "lorem ipsum or 'add more here' stubs.\n"
+    "- Think past the literal words: include what a user of this kind of product would "
+    "expect (e.g. a shop needs quantities, totals and a way to actually order).\n"
+    "- Use realistic content and sensible defaults (currency, language, sample data) that "
+    "fit the request.\n"
+    "- Structure it properly: separate files by concern (e.g. HTML / CSS / JS, or modules), "
+    "and keep data and settings the owner will want to change in one obvious place.\n"
+    "- UIs must work on phones and desktops, be accessible (labels, alt text, keyboard), "
+    "and handle empty, loading and error states. Validate input and escape user content.\n"
+    "- Keep state the user expects to survive a reload (e.g. a cart).\n"
+    "- Add a README.md: what it is, how to run it, how to customise it, and honest "
+    "limitations (e.g. what needs a backend).\n"
+    "Write whole files with write_file rather than many tiny edits. Don't stop after a "
+    "skeleton -- you'll be asked to check your work against the checklist before finishing."
+)
+
+COMPLETION_CHECK_PROMPT = (
+    "QUALITY CHECK before you finish. Go through the feature checklist{source} item by item "
+    "and re-read the files you wrote. For each item say done or missing. Also look for: "
+    "placeholders or TODOs, broken links between files, features that are shown but don't "
+    "work, layouts that break on a phone, missing README.\n"
+    "If anything is missing or broken, fix it now with your tools (run the tests and commit "
+    "as usual). If everything is complete, reply with a short final summary that starts "
+    "with COMPLETE and don't call any tools."
+)
+
+MAX_COMPLETION_CHECKS = 2
+MAX_TURNS_BUILD = 60
+
+_BUILD_VERB = r"(?:build|create|make|generate|develop|design|scaffold|set\s*up|write|code|implement)"
+_BUILD_NOUN = (
+    r"(?:app|application|web\s*app|website|web\s*site|site|web\s*page|page|landing|portfolio|dashboard|"
+    r"game|store|shop|e-?commerce|marketplace|blog|api|backend|frontend|server|bot|chatbot|cli|tool|"
+    r"project|clone|platform|system|calculator|tracker|extension|plugin|service|program|ui)s?"
+)
+_BUILD_REQUEST = re.compile(
+    rf"\b{_BUILD_VERB}\b(?:\s+(?:me|us))?\s+(?:a|an|new|one|my\s+own|the\s+new)\b[^.?!\n]{{0,60}}?\b{_BUILD_NOUN}\b"
+    rf"|\b(?:want|need)\b[^.?!\n]{{0,20}}\b(?:a|an)\s+[^.?!\n]{{0,40}}?\b{_BUILD_NOUN}\b",
+    re.IGNORECASE,
+)
+
+
+def is_build_request(task: str) -> bool:
+    """True for 'make a food website', 'build me an expense tracker app', ...;
+    False for edits to existing code like 'make the page responsive'."""
+    return bool(_BUILD_REQUEST.search(task))
+
 
 FALLBACK_GIT_NAME = "aiswe"
 FALLBACK_GIT_EMAIL = "aiswe@localhost"
@@ -237,6 +295,35 @@ def _make_plan(sandbox: Sandbox, task: str, planner_chain: list[str], log: Log) 
     if plan.strip():
         log(f"[planner:{planner_model}] plan:\n{plan}")
     return plan or None
+
+
+def _make_build_spec(sandbox: Sandbox, task: str, model_chain: list[str], log: Log) -> str | None:
+    """Build mode's plan: a feature checklist the build is held to. Uses the
+    main chain, not the cheap planner -- what gets built is decided here.
+    Best-effort, like _make_plan."""
+    listing = sandbox.call_helper("list_dir", path=".")
+    file_list = "\n".join(listing.get("entries", [])) if listing.get("ok") else "(unknown)"
+    prompt = (
+        f"Request: {task}\n\nTop-level files in the repo now:\n{file_list or '(empty)'}\n\n"
+        "Before any code is written, write a short spec for building this:\n"
+        "1. Users: who will use it and what they need to get done (1-2 lines).\n"
+        "2. Feature checklist: 8-15 '- [ ]' items covering what a real user would expect from a "
+        "good version of this -- not only what the request names. Make each item concrete and "
+        "checkable (e.g. 'cart shows quantity, line totals and grand total'). Cover the main "
+        "flows end to end, empty/error states, input validation, phone layout, and saving state "
+        "where users expect it.\n"
+        "3. Files: the file layout, one line per file saying what it holds.\n"
+        "4. Assumptions: currency, language, sample data and other defaults you picked from the request.\n"
+        "No code, nothing before or after the spec."
+    )
+    try:
+        response, spec_model = _complete_with_fallback(model_chain, [{"role": "user", "content": prompt}], log)
+    except RuntimeError:
+        return None
+    spec = (response.choices[0].message.content or "").strip() if response.choices else ""
+    if spec:
+        log(f"[build:{spec_model}] spec:\n{spec}")
+    return spec or None
 
 
 async def _run_tool(sandbox: Sandbox, name: str, args: dict[str, Any]) -> str:
@@ -392,16 +479,29 @@ class AgentSession:
         messages = self.messages
         messages.append({"role": "user", "content": task})
 
-        if first_message:
+        build = mode != "security" and ((self.new_project and first_message) or is_build_request(task))
+        spec = None
+        if build:
+            self.log("[build] build mode: writing a feature checklist first; the result is checked against it before finishing")
+            spec = await asyncio.to_thread(_make_build_spec, sandbox, task, model_chain, self.log)
+            checklist = (
+                "\n\nFEATURE CHECKLIST (deliver all of it; you may add items, but say why if you drop one):\n" + spec
+                if spec else ""
+            )
+            messages.append({"role": "user", "content": BUILD_PROMPT + checklist})
+        elif first_message:
             planner_chain = [m for m in build_planner_chain() if _provider_available(m)]
             plan = await asyncio.to_thread(_make_plan, sandbox, task, planner_chain, self.log)
             if plan:
                 messages.append({"role": "user", "content": f"Suggested plan (from a cheaper planning pass -- adjust as needed, this isn't binding):\n{plan}"})
         review_state: dict[str, Any] = {"rounds": 0, "notice_shown": False}
         security_rounds = 0
+        completion_checks = 0
+        worked_since_check = True  # a check is only worth repeating if the model changed something
 
         response = None
-        for _turn in range(MAX_TURNS):
+        max_turns = MAX_TURNS_BUILD if build else MAX_TURNS
+        for _turn in range(max_turns):
             if self._cancelled:
                 self.log("[cancelled] stopped at your request")
                 return
@@ -420,7 +520,16 @@ class AgentSession:
                 self.emit({"type": "assistant", "text": msg.content, "model": used_model})
 
             if not msg.tool_calls:
+                if build and worked_since_check and completion_checks < MAX_COMPLETION_CHECKS:
+                    completion_checks += 1
+                    worked_since_check = False
+                    self.log(f"[build] quality check {completion_checks}/{MAX_COMPLETION_CHECKS}: "
+                             "comparing the result with the feature checklist")
+                    source = "" if spec else " (the features a real user of this would expect)"
+                    messages.append({"role": "user", "content": COMPLETION_CHECK_PROMPT.format(source=source)})
+                    continue
                 break
+            worked_since_check = True
 
             for tool_call in msg.tool_calls:
                 name = tool_call.function.name
@@ -490,7 +599,7 @@ class AgentSession:
 
                 answer(result_text)
         else:
-            self.log(f"\n[warning] hit the {MAX_TURNS}-turn limit without the model finishing")
+            self.log(f"\n[warning] hit the {max_turns}-turn limit without the model finishing")
 
         usage = None
         if response is not None and getattr(response, "usage", None):

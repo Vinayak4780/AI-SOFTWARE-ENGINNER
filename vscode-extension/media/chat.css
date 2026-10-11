@@ -188,9 +188,36 @@ button.icon:hover { background: var(--vscode-toolbar-hoverBackground); }
   padding: 4px 6px;
   font-family: inherit;
 }
-.custom-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
-.custom-row { border-left: 2px solid var(--vscode-panel-border, transparent); padding-left: 6px; }
-.settings-actions { margin: 16px 0 8px; display: flex; justify-content: flex-end; }
+#settings select {
+  width: 100%;
+  color: var(--vscode-dropdown-foreground);
+  background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border, transparent);
+  border-radius: 3px;
+  padding: 4px;
+  font-family: inherit;
+}
+.add-card {
+  margin-top: 10px;
+  padding: 2px 10px 4px;
+  border: 1px solid var(--vscode-panel-border, transparent);
+  border-radius: 4px;
+}
+.add-card h4 { margin-top: 8px !important; }
+.field { display: flex; flex-direction: column; gap: 3px; margin: 8px 0; }
+.field-label { font-size: 0.85em; color: var(--vscode-descriptionForeground); }
+.provider-row { padding-bottom: 6px; border-bottom: 1px solid var(--vscode-panel-border, transparent); }
+.grow { flex: 1; margin: 0; overflow-wrap: anywhere; }
+.backend-error {
+  white-space: pre-wrap;
+  margin: 8px 0;
+  padding: 6px 8px;
+  border-left: 3px solid var(--vscode-editorWarning-foreground);
+  background: var(--vscode-textBlockQuote-background);
+  font-size: 0.9em;
+}
+.settings-actions { margin: 10px 0 8px; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+.settings-actions .provider-warning { flex: 1; }
 
 /* Security */
 .approval.warned { border-color: var(--vscode-editorWarning-foreground); }

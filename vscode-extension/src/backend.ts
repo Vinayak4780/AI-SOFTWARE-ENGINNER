@@ -19,6 +19,7 @@ export class Backend implements vscode.Disposable {
   private proc: ChildProcess | undefined;
   private buffer = "";
   private stopping = false;
+  private stderrTail = ""; // last bit of stderr, to explain an early exit
 
   constructor(
     private readonly options: BackendOptions,
@@ -32,6 +33,7 @@ export class Backend implements vscode.Disposable {
 
   start(): void {
     const o = this.options;
+    this.stderrTail = "";
     const args = ["-m", "aiswe", "serve", "--repo", o.repo];
     if (o.autoApprove) args.push("--yes");
     if (o.network) args.push("--network");
@@ -48,7 +50,10 @@ export class Backend implements vscode.Disposable {
     proc.stdout!.setEncoding("utf8");
     proc.stderr!.setEncoding("utf8");
     proc.stdout!.on("data", (chunk: string) => this.onStdout(chunk));
-    proc.stderr!.on("data", (chunk: string) => this.log.append(chunk));
+    proc.stderr!.on("data", (chunk: string) => {
+      this.log.append(chunk);
+      this.stderrTail = (this.stderrTail + chunk).slice(-2000);
+    });
     // A message written to a process that failed to start or just died.
     proc.stdin!.on("error", (err) => this.log.appendLine(`[stdin] ${err.message}`));
     proc.on("error", (err) => {
@@ -62,7 +67,14 @@ export class Backend implements vscode.Disposable {
     proc.on("exit", (code) => {
       this.log.appendLine(`[aiswe exited with code ${code}]`);
       if (this.proc === proc) this.proc = undefined;
-      if (!this.stopping) this.onEvent({ type: "exit", code });
+      if (this.stopping) return;
+      if (/No module named aiswe/.test(this.stderrTail)) {
+        this.onEvent({
+          type: "error",
+          text: `aiswe isn't installed for "${o.pythonPath}". Install it with:\n  ${o.pythonPath} -m pip install git+https://github.com/Vinayak4780/AI-SOFTWARE-ENGINNER.git\nor set the aiswe.pythonPath setting to a Python that has it.`,
+        });
+      }
+      this.onEvent({ type: "exit", code });
     });
   }
 
