@@ -16,6 +16,7 @@
   const securityMode = document.getElementById("security-mode");
   const settingsPane = document.getElementById("settings");
   const historyPane = document.getElementById("history");
+  const recentBox = document.getElementById("recent");
 
   let providers = []; // from the server's "models" event
   let selectedModel = "auto";
@@ -269,7 +270,6 @@
   });
   document.getElementById("open-settings").addEventListener("click", () => toggleSettings(true));
   document.getElementById("open-history").addEventListener("click", () => toggleHistory(historyPane.hidden));
-  document.getElementById("empty-history").addEventListener("click", () => toggleHistory(true));
 
   // --- chat history -------------------------------------------------------
 
@@ -344,6 +344,29 @@
       if (e.key === "Enter") open();
     };
     return row;
+  }
+
+  /** Every saved chat on the start screen, grouped by date, one click away. */
+  function renderRecent() {
+    recentBox.textContent = "";
+    recentBox.hidden = !chats.length;
+    if (!chats.length) return;
+    const head = el("div", "recent-head");
+    head.appendChild(el("span", "recent-title", `Your chats (${chats.length})`));
+    const search = el("button", "link", "Search");
+    search.type = "button";
+    search.onclick = () => toggleHistory(true);
+    head.appendChild(search);
+    recentBox.appendChild(head);
+    let group = "";
+    for (const chat of chats) {
+      const g = when(chat.updated).group;
+      if (g !== group) {
+        group = g;
+        recentBox.appendChild(el("div", "chat-group", g));
+      }
+      recentBox.appendChild(chatRow(chat));
+    }
   }
 
   function renderHistoryList(list) {
@@ -636,6 +659,7 @@
       case "chatList":
         chats = data.chats || [];
         currentChatId = data.currentId;
+        renderRecent();
         if (!historyPane.hidden) {
           const list = historyPane.querySelector(".chat-list");
           if (list) renderHistoryList(list);

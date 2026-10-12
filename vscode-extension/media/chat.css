@@ -267,4 +267,6 @@ button.icon:hover { background: var(--vscode-toolbar-hoverBackground); }
 .chat-delete { visibility: hidden; padding: 0 4px; }
 .chat-row:hover .chat-delete, .chat-row:focus .chat-delete, .chat-delete.confirm { visibility: visible; }
 .chat-delete.confirm { color: var(--vscode-errorForeground); font-size: 0.85em; }
-#empty-history { margin-top: 8px; }
+#recent { margin: 18px 0 0; text-align: left; }
+.recent-head { display: flex; justify-content: space-between; align-items: center; }
+.recent-title { font-weight: 600; color: var(--vscode-foreground); }

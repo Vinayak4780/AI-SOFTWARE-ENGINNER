@@ -13,6 +13,7 @@ const MAX_SELECTION_CHARS = 20000;
 const KEYS_SECRET = "aiswe.apiKeys"; // JSON {ENV_VAR_NAME: key}
 const CUSTOM_SECRET = "aiswe.customEndpoints"; // JSON [{name, base_url, api_key}]
 const MODEL_STATE = "aiswe.selectedModel";
+const LAST_CHAT_STATE = "aiswe.lastChatId"; // per workspace: the chat to reopen after a restart
 
 interface CustomEndpoint {
   name: string;
@@ -258,6 +259,30 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
     this.post({ kind: "chatList", chats: await this.store.list(), currentId: this.chat?.id ?? null });
   }
 
+  /** The chat on screen, remembered so a restart of VS Code reopens it. */
+  private setChat(chat: Chat | undefined): void {
+    this.chat = chat;
+    this.context.workspaceState.update(LAST_CHAT_STATE, chat?.id);
+  }
+
+  /** A new panel (VS Code started, or the view was reopened): draw the current
+   * chat, or reopen the one that was on screen last time. */
+  private async showCurrentChat(): Promise<void> {
+    if (!this.chat) {
+      const lastId = this.context.workspaceState.get<string>(LAST_CHAT_STATE);
+      const last = lastId ? await this.store.load(lastId) : undefined;
+      if (last && !this.chat) {
+        this.chat = last;
+        this.restorePending = true; // the agent gets it back with the next message
+      }
+    }
+    if (this.chat) {
+      this.post({ kind: "clear" });
+      this.post({ kind: "replay", items: this.chat.transcript });
+    }
+    await this.postChatList();
+  }
+
   private async openChat(id: string): Promise<void> {
     if (this.busy) {
       vscode.window.showInformationMessage("aiswe is still working -- stop it first.");
@@ -273,7 +298,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
       await this.postChatList();
       return;
     }
-    this.chat = chat;
+    this.setChat(chat);
     this.restorePending = true; // the agent gets this conversation back with the next message
     this.approvals.clear();
     this.post({ kind: "clear" });
@@ -305,6 +330,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
         this.post({ kind: "selectedModel", model: this.context.globalState.get<string>(MODEL_STATE, "auto") });
         this.postSettings();
         this.listModels(false);
+        this.showCurrentChat();
         break;
       case "send":
         this.sendMessage(m);
@@ -360,7 +386,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
       return;
     }
     if (!this.chat) {
-      this.chat = newChat(text);
+      this.setChat(newChat(text));
       this.restorePending = false;
     } else if (this.restorePending) {
       backend.send({ type: "restore", messages: this.chat.messages });
@@ -369,6 +395,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
     const ctx = m.includeContext ? this.editorContext() : undefined;
     const contextLabel = this.contextLabel(ctx);
     this.record({ kind: "user", text, contextLabel });
+    this.saveChat(); // saved right away, so closing VS Code mid-answer keeps the question
     this.post({ kind: "user", text, contextLabel });
     const model = String(m.model || this.context.globalState.get<string>(MODEL_STATE, "auto"));
     const mode = m.mode === "security" ? "security" : "default";
@@ -398,7 +425,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
       return;
     }
     if (this.backend?.running) this.backend.send({ type: "reset" });
-    this.chat = undefined; // the old one is already saved; it stays in the history
+    this.setChat(undefined); // the old one is already saved; it stays in the history
     this.restorePending = false;
     this.approvals.clear();
     this.post({ kind: "clear" });
@@ -408,7 +435,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
   restart(): void {
     this.stopBackend();
     this.setBusy(false);
-    this.chat = undefined;
+    this.setChat(undefined);
     this.post({ kind: "clear" });
     this.postChatList();
   }
@@ -431,7 +458,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
   <div id="empty">
     <h2>aiswe</h2>
     <p>Ask about your code or describe a change. The agent works in a sandbox and asks before it edits, runs commands or commits.</p>
-    <button type="button" id="empty-history" class="link">&#x1F552; Previous chats</button>
+    <div id="recent" hidden></div>
   </div>
 </div>
 <div id="settings" hidden></div>
@@ -460,6 +487,7 @@ class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable 
   }
 
   dispose(): void {
+    if (this.chat) this.store.save(this.chat); // keep a reply that was still coming in
     this.stopBackend();
     this.disposables.forEach((d) => d.dispose());
   }
